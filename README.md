@@ -26,6 +26,20 @@ Both routes use the same script and layout. The script detects the route from th
 5. Load the layout and reset the timer **before creating a new save**. Creating that save arms auto-start; your first directional movement starts the timer once gameplay controls become available. Keyboard and controller movement both work.
 6. Reset manually between attempts, then create another new save. The normal Start/Split hotkey remains available.
 
+## Reordering or removing splits
+
+Reset the timer before editing. Use **Save Splits As** to keep a separate copy if the current file contains PBs or other times you want to preserve.
+
+1. Right-click LiveSplit and select **Edit Splits**.
+2. Select the boss row you want to change.
+3. To reorder it, use **Move Up** or **Move Down** until it reaches the desired position. The boss portrait moves with the row.
+4. To remove it, select the row and click **Remove Segment**.
+5. Click **OK**, then right-click **Save Splits As** and save the edited route under a new name.
+
+**Autosplitter compatibility:** this version requires all ten boss names in one of the two supported orders shown below. Swapping Talos and Carmilla is supported; loading the other included `.lss` is the easiest way to make that change. Removing a boss, renaming it, or choosing another order prevents automatic starting and boss splitting.
+
+For a custom route, open **Edit Layout → Scriptable Auto Splitter**, turn off **Starting** and **Splitting**, and use your LiveSplit hotkeys to start and split manually. Leave the component enabled to keep loading-screen removal, and keep the timer on **Game Time**. Save the layout after changing its settings.
+
 ## Timing behavior
 
 - **Auto-start:** a newly created save arms the timer. Holding a direction through the opening starts timing when the game first accepts movement. Jump or attack alone does not start it.
