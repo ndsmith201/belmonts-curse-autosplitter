@@ -3,6 +3,7 @@
 // A new save arms auto-start; the first accepted movement input starts timing.
 // Reset manually between attempts.
 // Use the accompanying ten-segment .lss file and enable Starting in the layout.
+// Talos-first and Carmilla-first routes are detected from the loaded split names.
 // Game Time removes loading screens; Real Time is also recorded by LiveSplit.
 // GameAssembly.dll SHA256: 4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152
 // Defeat GUIDs were extracted from this installed build's actual assets.
@@ -30,12 +31,29 @@ startup
     };
     vars.idBits = new Dictionary<string, int>();
     for (int i = 0; i < 10; i++) vars.idBits.Add(vars.ids[i], 1 << i);
+    // GUID bits stay canonical; only the segment-to-boss mapping changes.
+    // Validate the entire route so another permutation cannot split the wrong boss.
+    vars.routeForRun = (Func<int[]>)(() => {
+        if (timer.Run == null || timer.Run.Count != 10) return null;
+        int[] order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+        if (String.Equals((timer.Run[5].Name ?? "").Trim(), "Carmilla", StringComparison.OrdinalIgnoreCase))
+        {
+            order[5] = 6;
+            order[6] = 5;
+        }
+        for (int i = 0; i < 10; i++)
+            if (!String.Equals((timer.Run[i].Name ?? "").Trim(), (string)vars.names[order[i]],
+                StringComparison.OrdinalIgnoreCase)) return null;
+        return order;
+    });
+    vars.routeValid = false;
     vars.mask = 0;
     vars.valid = false;
     vars.supported = false;
     vars.baselineNeeded = true;
     vars.firedMask = 0;
     vars.trigger = -1;
+    vars.triggerBoss = -1;
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
@@ -53,6 +71,7 @@ init
     vars.valid = false;
     vars.baselineNeeded = true;
     vars.trigger = -1;
+    vars.triggerBoss = -1;
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
@@ -354,9 +373,14 @@ init
 update
 {
     vars.trigger = -1;
+    vars.triggerBoss = -1;
     vars.startRequested = false;
     vars.valid = false;
     if (!vars.supported) return false;
+    int[] route = vars.routeForRun();
+    bool previousRouteValid = vars.routeValid;
+    vars.routeValid = route != null;
+    if (route == null || !previousRouteValid) vars.baselineNeeded = true;
     // Loading screens can replace or temporarily remove the player entity.
     // Read their state before the player; retain the last sample on a transient
     // read failure instead of treating missing player data as a loading screen.
@@ -489,7 +513,7 @@ update
         int previous = vars.mask;
         vars.mask = mask;
         vars.valid = true;
-        vars.status = "Reading live boss flags";
+        vars.status = route == null ? "Load a supported Talos-first or Carmilla-first split route" : "Reading live boss flags";
         if (vars.baselineNeeded || (previous & ~mask) != 0)
         {
             // Attach, player replacement, failed reads and save rollback must
@@ -498,11 +522,15 @@ update
             return;
         }
         int index = timer.CurrentSplitIndex;
-        if (timer.CurrentPhase == TimerPhase.Running && index >= 0 && index < 10)
+        if (route != null && timer.CurrentPhase == TimerPhase.Running && index >= 0 && index < 10)
         {
-            int bit = 1 << index;
+            int boss = route[index];
+            int bit = 1 << boss;
             if (((mask & ~previous) & bit) != 0 && (((int)vars.firedMask & bit) == 0))
+            {
                 vars.trigger = index;
+                vars.triggerBoss = boss;
+            }
         }
     }
     catch
@@ -523,7 +551,7 @@ isLoading
 
 start
 {
-    if (!vars.supported || !vars.startRequested || timer.CurrentPhase != TimerPhase.NotRunning)
+    if (!vars.supported || !vars.routeValid || !vars.startRequested || timer.CurrentPhase != TimerPhase.NotRunning)
         return false;
     // Consume this event even if LiveSplit's Starting checkbox is disabled.
     vars.startRequested = false;
@@ -536,11 +564,16 @@ start
 split
 {
     int index = timer.CurrentSplitIndex;
+    int[] route = vars.routeForRun();
     if (timer.CurrentPhase != TimerPhase.Running || !vars.valid || index < 0 || index >= 10
-        || (int)vars.trigger != index) return false;
-    vars.firedMask = (int)vars.firedMask | (1 << index);
+        || route == null || (int)vars.trigger != index || (int)vars.triggerBoss != route[index]) return false;
+    int boss = route[index];
+    int bit = 1 << boss;
+    if (((int)vars.firedMask & bit) != 0) return false;
+    vars.firedMask = (int)vars.firedMask | bit;
     vars.trigger = -1;
-    print("Boss defeated: " + vars.names[index]);
+    vars.triggerBoss = -1;
+    print("Boss defeated: " + vars.names[boss]);
     return true;
 }
 
@@ -552,6 +585,7 @@ onStart
     vars.armedSaveObject = 0L;
     vars.firedMask = 0;
     vars.trigger = -1;
+    vars.triggerBoss = -1;
     vars.baselineNeeded = true;
 }
 
@@ -562,6 +596,7 @@ onReset
     vars.armedSaveObject = 0L;
     vars.firedMask = 0;
     vars.trigger = -1;
+    vars.triggerBoss = -1;
     vars.baselineNeeded = true;
 }
 
@@ -578,6 +613,7 @@ exit
     vars.baselineNeeded = true;
     vars.component = 0L;
     vars.trigger = -1;
+    vars.triggerBoss = -1;
     vars.status = "Waiting for the game";
 }
 

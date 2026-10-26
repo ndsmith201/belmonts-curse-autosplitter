@@ -176,7 +176,7 @@
       <Path>LiveSplit.ScriptableAutoSplit.dll</Path>
       <Settings>
         <Version>1.5</Version>
-        <ScriptPath>C:\Users\Nikku\Documents\Codex\2026-10-23\ca-x20\outputs\BelmontsCurse-Bosses.asl</ScriptPath>
+        <ScriptPath>C:\Users\Nikku\Documents\Codex\2026-10-23\ca-x20\belmonts-curse-livesplit\BelmontsCurse-Bosses.asl</ScriptPath>
         <Start>True</Start>
         <Reset>False</Reset>
         <Split>True</Split>
