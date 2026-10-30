@@ -1,5 +1,5 @@
 // Castlevania: Belmont's Curse -- ten-boss route, Windows Steam build 1.1.3.
-// Reads live progression flags; does not write to the game or save files.
+// Reads boss progression and final Dracula HP; does not write to the game or saves.
 // A new save arms auto-start; the first accepted movement input starts timing.
 // Reset manually between attempts.
 // Use the accompanying ten-segment .lss file and enable Starting in the layout.
@@ -27,7 +27,7 @@ startup
         "4a7b39e0c582899409003620d44f5712", // Carmilla
         "c94c4e1cc1f8dbf4fb525f2c6b94920c", // Death
         "e47322c821f3eda4999f654f86dad494", // Isaac
-        "402628a8ae258e240a8fe5feca62e65d"  // DraculaBeast -- final form
+        "402628a8ae258e240a8fe5feca62e65d"  // DraculaBeast diagnostic; final split uses HP
     };
     vars.idBits = new Dictionary<string, int>();
     for (int i = 0; i < 10; i++) vars.idBits.Add(vars.ids[i], 1 << i);
@@ -47,6 +47,21 @@ startup
         return order;
     });
     vars.routeValid = false;
+    vars.resetDracula = (Action)(() => {
+        vars.draculaEntity = 0L;
+        vars.draculaStat = 0L;
+        vars.draculaContext = 0L;
+        vars.draculaSave = 0L;
+        vars.draculaPositive = false;
+        vars.draculaTrigger = false;
+        vars.draculaValid = false;
+        vars.draculaHealth = -1.0f;
+        vars.draculaMaximum = -1.0f;
+        vars.draculaStatus = "Waiting for final Dracula health";
+    });
+    vars.resetDracula();
+    // The live final-form reader is installed in init; null means no encounter.
+    vars.draculaSnapshot = (Func<object[]>)(() => null);
     vars.mask = 0;
     vars.valid = false;
     vars.supported = false;
@@ -68,6 +83,7 @@ startup
 
 init
 {
+    vars.resetDracula();
     vars.valid = false;
     vars.baselineNeeded = true;
     vars.trigger = -1;
@@ -248,6 +264,192 @@ init
         int end = Array.IndexOf(bytes, (byte)0);
         return end < 0 ? "" : Encoding.ASCII.GetString(bytes, 0, end);
     });
+    // Final-form reader: null means no encounter; exceptions mark an unstable sample.
+    // Samples contain entity, current StatObject, context, effective HP and max HP.
+    vars.draculaClassNames = new Dictionary<long, string>();
+    vars.draculaComponentHandles = new Dictionary<long, long[]>();
+    vars.draculaClassName = (Func<long, string>)(obj => {
+        long klass = vars.ptr(obj);
+        string name;
+        if (!vars.draculaClassNames.TryGetValue(klass, out name))
+        {
+            name = vars.nativeName(vars.ptr(klass + 0x10));
+            string space = vars.nativeName(vars.ptr(klass + 0x18));
+            if (space != "") name = space + "." + name;
+            vars.draculaClassNames.Add(klass, name);
+        }
+        return name;
+    });
+    vars.draculaComponents = (Func<long, long[]>)(entity => {
+        long cache = vars.ptr(entity + 0x30);
+        long entries = vars.ptr(cache + 0x18);
+        int count = vars.i32(cache + 0x20), sampleVersion = vars.i32(cache + 0x24);
+        if (count < 0 || count > 2048 || count > vars.i32(entries + 0x18))
+            throw new Exception("Invalid final-boss component cache");
+        long[] found;
+        if (vars.draculaComponentHandles.TryGetValue(entity, out found)
+            && found[4] == cache && found[5] == entries && found[6] == count && found[7] == sampleVersion)
+            return found;
+        byte[] data = vars.read(entries + 0x20, count * 0x18);
+        found = new long[] { 0, 0, 0, 0, cache, entries, count, sampleVersion };
+        for (int i = 0; i < count; i++)
+        {
+            if (BitConverter.ToInt32(data, i * 0x18) < 0) continue;
+            long component = BitConverter.ToInt64(data, i * 0x18 + 0x10);
+            if (component < 0x10000) continue;
+            string name;
+            try { name = vars.draculaClassName(component); }
+            catch { found[3] = 1; continue; }
+            if (name == "DraculaBeastState") found[0] = component;
+            else if (name == "Damageable") found[1] = component;
+            else if (name == "MobComponent") found[2] = component;
+        }
+        if (entries != (long)vars.ptr(cache + 0x18)
+            || count != (int)vars.i32(cache + 0x20)
+            || sampleVersion != (int)vars.i32(cache + 0x24))
+            throw new Exception("Final-boss component cache changed");
+        if (found[0] != 0 && found[1] != 0 && found[2] != 0)
+        {
+            found[3] = 0;
+            vars.draculaComponentHandles[entity] = found;
+        }
+        return found;
+    });
+    vars.draculaStatValue = (Func<long, long, float>)((reference, entity) => {
+        if (reference < 0x10000 || vars.ptr(reference + 0x20) != entity)
+            throw new Exception("Invalid final-boss health reference");
+        long stat = vars.ptr(reference + 0x18);
+        if (stat < 0x10000 || (string)vars.draculaClassName(stat) != "StatObject")
+            throw new Exception("Invalid final-boss health stat");
+        long modifiers = vars.ptr(stat + 0x20);
+        int count = vars.i32(modifiers + 0x18), sampleVersion = vars.i32(modifiers + 0x1C);
+        // Final Beast's actual current/max/min stats have no modifiers. An unknown
+        // modifier must not silently convert a base value into an effective value.
+        if (count != 0) throw new Exception("Unsupported final-boss health modifier");
+        float value = BitConverter.ToSingle(vars.read(stat + 0x18, 4), 0);
+        if (float.IsNaN(value) || float.IsInfinity(value)
+            || value < int.MinValue || value >= (double)int.MaxValue)
+            throw new Exception("Invalid final-boss stat value");
+        if (stat != (long)vars.ptr(reference + 0x18)
+            || entity != (long)vars.ptr(reference + 0x20)
+            || modifiers != (long)vars.ptr(stat + 0x20)
+            || count != (int)vars.i32(modifiers + 0x18)
+            || sampleVersion != (int)vars.i32(modifiers + 0x1C))
+            throw new Exception("Final-boss health reference changed");
+        // StatObject.GetInt uses the same ties-to-even rounding as Mathf.RoundToInt.
+        return (float)Math.Round((double)value, MidpointRounding.ToEven);
+    });
+    vars.draculaSnapshot = (Func<object[]>)(() => {
+        long type = vars.ptr((long)vars.baseAddress + 0x3F23D78);
+        long manager = vars.ptr(vars.ptr(type + 0xB8));
+        long context = vars.ptr(manager + 0x28);
+        if (context < 0x10000) throw new Exception("No boss entity context");
+        Func<long, bool, object[]> sample = (entity, cached) => {
+            if (entity < 0x10000 || vars.ptr(entity + 0x28) != context) return null;
+            if (!cached && vars.ptr(entity + 0x10) == 0) return null;
+            if ((string)vars.draculaClassName(entity) != "MotherBase.EntityFramework.Entity") return null;
+            long[] components = vars.draculaComponents(entity);
+            long beast = components[0], damageable = components[1], mobComponent = components[2];
+            if (beast == 0 || damageable == 0 || mobComponent == 0)
+            {
+                if (components[3] != 0) throw new Exception("Incomplete boss component identities");
+                return null;
+            }
+            if ((string)vars.draculaClassName(beast) != "DraculaBeastState"
+                || (string)vars.draculaClassName(damageable) != "Damageable"
+                || (string)vars.draculaClassName(mobComponent) != "MobComponent")
+                throw new Exception("Cached final-boss components changed class");
+            if (vars.ptr(damageable + 0x48) != entity) return null;
+            long mob = vars.ptr(mobComponent + 0x20);
+            long id = vars.ptr(mob + 0x18);
+            int length = vars.i32(id + 0x10);
+            if (length != 12 || Encoding.Unicode.GetString(vars.read(id + 0x14, 24)) != "DraculaBeast")
+                return null;
+            long currentRef = vars.ptr(damageable + 0x20), maxRef = vars.ptr(damageable + 0x28);
+            long minRef = vars.ptr(damageable + 0x30);
+            if (vars.ptr(damageable + 0x38) != 0 || vars.ptr(damageable + 0x40) != 0)
+                throw new Exception("Unsupported final-boss health clamp reference");
+            long stat = vars.ptr(currentRef + 0x18);
+            float health = vars.draculaStatValue(currentRef, entity);
+            float maximum = vars.draculaStatValue(maxRef, entity);
+            float minimum = minRef == 0 ? 0.0f : (float)vars.draculaStatValue(minRef, entity);
+            float rawHealth = health;
+            // Beast grab moves can temporarily set HealthMin to1. The displayed
+            // Damageable.currentHealth is max(current stat, minimum stat).
+            health = Math.Max(health, minimum);
+            if (health == 0)
+            {
+                // Health and its temporary minimum can change in the same action.
+                // A second numeric sample rejects a mixture of two different states.
+                float currentCheck = vars.draculaStatValue(currentRef, entity);
+                float maximumCheck = vars.draculaStatValue(maxRef, entity);
+                float minimumCheck = minRef == 0 ? 0.0f : (float)vars.draculaStatValue(minRef, entity);
+                if (currentCheck != rawHealth || maximumCheck != maximum || minimumCheck != minimum)
+                    throw new Exception("Final-boss health values changed during zero sample");
+            }
+            byte[] flags = vars.read(entity + 0x20, 2);
+            if (flags[0] > 1 || flags[1] > 1) throw new Exception("Invalid final-boss entity flags");
+            bool enabled = flags[0] == 0 && flags[1] == 1 && vars.ptr(entity + 0x10) != 0;
+            // Die may remove the entity from enabled sets before our next30Hz poll.
+            // A cached actual0 with onDieActionStarted still represents the hit.
+            if (!enabled)
+            {
+                if (!cached || health != 0) return null;
+                byte deathStarted = vars.read(damageable + 0x58, 1)[0];
+                if (deathStarted != 1)
+                    throw new Exception("Waiting for cached zero-health death state");
+            }
+            if (context != (long)vars.ptr(manager + 0x28)
+                || context != (long)vars.ptr(entity + 0x28)
+                || components[4] != (long)vars.ptr(entity + 0x30)
+                || components[5] != (long)vars.ptr(components[4] + 0x18)
+                || components[6] != (int)vars.i32(components[4] + 0x20)
+                || components[7] != (int)vars.i32(components[4] + 0x24)
+                || entity != (long)vars.ptr(damageable + 0x48)
+                || mob != (long)vars.ptr(mobComponent + 0x20)
+                || currentRef != (long)vars.ptr(damageable + 0x20)
+                || maxRef != (long)vars.ptr(damageable + 0x28)
+                || minRef != (long)vars.ptr(damageable + 0x30)
+                || stat != (long)vars.ptr(currentRef + 0x18))
+                throw new Exception("Final-boss identity changed during health sample");
+            return new object[] { entity, stat, context, health, maximum };
+        };
+        long previous = vars.draculaEntity;
+        if (previous >= 0x10000)
+        {
+            object[] cached = sample(previous, true);
+            if (cached != null) return cached;
+        }
+        long set = vars.ptr(context + 0x38);
+        long slots = vars.ptr(set + 0x18);
+        int count = vars.i32(set + 0x20), last = vars.i32(set + 0x24), sampleVersion = vars.i32(set + 0x38);
+        if (last < 0 || last > 8192 || count < 0 || count > last || last > vars.i32(slots + 0x18))
+            throw new Exception("Invalid enabled boss entity set");
+        byte[] entities = vars.read(slots + 0x20, last * 0x10);
+        object[] result = null;
+        bool unknown = false;
+        for (int i = 0; i < last; i++)
+        {
+            if (BitConverter.ToInt32(entities, i * 0x10) < 0) continue;
+            long entity = BitConverter.ToInt64(entities, i * 0x10 + 8);
+            if (entity < 0x10000) continue;
+            object[] candidate;
+            try { candidate = sample(entity, false); }
+            catch { unknown = true; continue; }
+            if (candidate == null) continue;
+            if (result != null) throw new Exception("Multiple final Dracula entities");
+            result = candidate;
+        }
+        if (context != (long)vars.ptr(manager + 0x28)
+            || set != (long)vars.ptr(context + 0x38)
+            || slots != (long)vars.ptr(set + 0x18)
+            || count != (int)vars.i32(set + 0x20)
+            || last != (int)vars.i32(set + 0x24)
+            || sampleVersion != (int)vars.i32(set + 0x38))
+            throw new Exception("Enabled boss entity set changed during search");
+        if (result == null && unknown) throw new Exception("Some enabled entity identities are unavailable");
+        return result;
+    });
     vars.gameplayState = (Func<long, bool>)(manager => {
         long initial = vars.ptr(manager + 0x20);
         long stack = vars.ptr(manager + 0xA0);
@@ -372,6 +574,8 @@ init
 
 update
 {
+    vars.draculaTrigger = false;
+    vars.draculaValid = false;
     vars.trigger = -1;
     vars.triggerBoss = -1;
     vars.startRequested = false;
@@ -440,6 +644,52 @@ update
             }
         }
         catch { vars.saveStatus = "Waiting for stable gameplay input"; }
+    }
+    // Final Dracula uses an independent health edge. Player progression can
+    // disappear during death/cutscenes and must not delay or suppress this split.
+    int finalIndex = timer.CurrentSplitIndex;
+    if (route == null || timer.CurrentPhase != TimerPhase.Running
+        || finalIndex < 0 || finalIndex >= 10 || route[finalIndex] != 9
+        || !vars.loadingValid || vars.loading || (((int)vars.firedMask & (1 << 9)) != 0))
+        vars.resetDracula();
+    else if (saveValid)
+    {
+        try
+        {
+            object[] sample = vars.draculaSnapshot();
+            if (sample == null) vars.resetDracula();
+            else
+            {
+                long entity = (long)sample[0], healthStat = (long)sample[1], context = (long)sample[2];
+                float health = (float)sample[3], maximum = (float)sample[4];
+                if (entity < 0x10000 || healthStat < 0x10000 || context < 0x10000
+                    || float.IsNaN(health) || float.IsInfinity(health) || health < 0
+                    || float.IsNaN(maximum) || float.IsInfinity(maximum) || maximum <= 0)
+                    throw new Exception("Invalid final Dracula health sample");
+                object[] confirmation = vars.saveSnapshot();
+                if ((long)confirmation[0] != (long)vars.lastSaveObject)
+                    throw new Exception("Save changed during Dracula health sample");
+                bool sameEncounter = entity == (long)vars.draculaEntity
+                    && healthStat == (long)vars.draculaStat && context == (long)vars.draculaContext
+                    && (long)vars.lastSaveObject == (long)vars.draculaSave;
+                if (sameEncounter && vars.draculaPositive && health == 0)
+                {
+                    // Recheck loading at the killing hit, not a later defeat flag.
+                    if ((bool)vars.loadingSnapshot()) vars.resetDracula();
+                    else vars.draculaTrigger = true;
+                }
+                vars.draculaEntity = entity;
+                vars.draculaStat = healthStat;
+                vars.draculaContext = context;
+                vars.draculaSave = (long)vars.lastSaveObject;
+                vars.draculaPositive = health > 0;
+                vars.draculaHealth = health;
+                vars.draculaMaximum = maximum;
+                vars.draculaValid = true;
+                vars.draculaStatus = "Reading final Dracula health";
+            }
+        }
+        catch { vars.draculaStatus = "Waiting for stable final Dracula health"; }
     }
     try
     {
@@ -526,7 +776,7 @@ update
         {
             int boss = route[index];
             int bit = 1 << boss;
-            if (((mask & ~previous) & bit) != 0 && (((int)vars.firedMask & bit) == 0))
+            if (boss != 9 && ((mask & ~previous) & bit) != 0 && (((int)vars.firedMask & bit) == 0))
             {
                 vars.trigger = index;
                 vars.triggerBoss = boss;
@@ -565,20 +815,26 @@ split
 {
     int index = timer.CurrentSplitIndex;
     int[] route = vars.routeForRun();
-    if (timer.CurrentPhase != TimerPhase.Running || !vars.valid || index < 0 || index >= 10
-        || route == null || (int)vars.trigger != index || (int)vars.triggerBoss != route[index]) return false;
+    if (timer.CurrentPhase != TimerPhase.Running || index < 0 || index >= 10 || route == null) return false;
     int boss = route[index];
+    if (boss == 9)
+    {
+        if (!vars.draculaTrigger || !vars.draculaValid) return false;
+    }
+    else if (!vars.valid || (int)vars.trigger != index || (int)vars.triggerBoss != boss) return false;
     int bit = 1 << boss;
     if (((int)vars.firedMask & bit) != 0) return false;
     vars.firedMask = (int)vars.firedMask | bit;
     vars.trigger = -1;
     vars.triggerBoss = -1;
-    print("Boss defeated: " + vars.names[boss]);
+    vars.draculaTrigger = false;
+    print(boss == 9 ? "Final Dracula HP reached zero" : "Boss defeated: " + vars.names[boss]);
     return true;
 }
 
 onStart
 {
+    vars.resetDracula();
     timer.CurrentTimingMethod = TimingMethod.GameTime;
     vars.startRequested = false;
     vars.startArmed = false;
@@ -591,6 +847,7 @@ onStart
 
 onReset
 {
+    vars.resetDracula();
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
@@ -602,6 +859,7 @@ onReset
 
 exit
 {
+    vars.resetDracula();
     vars.loading = false;
     vars.loadingValid = false;
     timer.IsGameTimePaused = false;

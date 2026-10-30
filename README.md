@@ -10,7 +10,7 @@ A ten-boss autosplitter with **two route orders**, **first-movement auto-start**
 
 | File | Purpose |
 | --- | --- |
-| [BelmontsCurse-Bosses.asl](BelmontsCurse-Bosses.asl) | Detects movement, boss defeats, and loading screens. |
+| [BelmontsCurse-Bosses.asl](BelmontsCurse-Bosses.asl) | Detects movement, boss defeats, Dracula's final HP, and loading screens. |
 | [BelmontsCurse-Bosses-MovementStart.lsl](BelmontsCurse-Bosses-MovementStart.lsl) | Ready-to-load layout with the autosplitter component. |
 | [BelmontsCurse-Bosses-Talos-First.lss](BelmontsCurse-Bosses-Talos-First.lss) | Talos → Carmilla route with embedded portraits. |
 | [BelmontsCurse-Bosses-Carmilla-First.lss](BelmontsCurse-Bosses-Carmilla-First.lss) | Carmilla → Talos route with embedded portraits. |
@@ -45,7 +45,7 @@ For a custom route, open **Edit Layout → Scriptable Auto Splitter**, turn off 
 - **Auto-start:** a newly created save arms the timer. Holding a direction through the opening starts timing when the game first accepts movement. Jump or attack alone does not start it.
 - **Existing saves:** loading an existing save does not arm or start the timer. Attaching during an already-created new-save intro does not trigger a late start.
 - **Game Time:** loading screens pause the clock automatically. Normal menus do not pause it. The script and included layout use Game Time; LiveSplit also records Real Time.
-- **Boss splits:** each boss splits when its live defeat flag appears. Keep the ten names and order of your selected route and keep the timer running during boss defeats. Previously defeated bosses are ignored when attaching or starting. Other route orders are not supported.
+- **Boss splits:** the first nine bosses split when their live defeat flags appear. Dracula finishes the run when his final beast form's health drops from above zero to **0 HP**. Keep the ten names and order of your selected route and keep the timer running during boss defeats. Previously defeated bosses are ignored when attaching or starting. Other route orders are not supported.
 - **Reset:** resets remain manual. Resetting on the same save does not rearm auto-start; create another new save for the next attempt.
 
 ## Boss order
@@ -63,7 +63,7 @@ For a custom route, open **Edit Layout → Scriptable Auto Splitter**, turn off 
 | 9 | Isaac 2 | Isaac 2 |
 | 10 | Dracula — final beast form | Dracula — final beast form |
 
-Dracula's first-form defeat does not finish the run. Splits follow the game's defeat flags, which may appear after a defeat animation.
+Dracula's first-form defeat does not finish the run. The final split uses the beast form's actual health instead of waiting for its defeat flag or death sequence. The temporary 1-HP protection during a grab does not finish the run. Loading a boss already at zero HP does not trigger a late finish.
 
 ## Compatibility and validation
 
@@ -71,4 +71,4 @@ Built for the verified **Steam 1.1.3** game binary and **LiveSplit 1.8.25 on 64-
 
 The script checks `GameAssembly.dll` before using its offsets. A changed game binary requires an updated script.
 
-Both route orders passed ten-boss checks in LiveSplit's native ASL engine, along with movement-start and loading-pause checks. The route files and all portraits were also loaded and rendered with LiveSplit. A complete live ten-boss run has not been tested, so try the next boss in a practice run before relying on it for a PB.
+Both route orders passed ten-boss checks in LiveSplit's native ASL engine, along with movement-start, loading-pause, and zero-HP safety checks. The health reader also correctly excluded first-form Dracula at zero HP in a live game. The route files and all portraits were loaded and rendered with LiveSplit. A final-beast killing hit and a complete ten-boss run have not yet been verified live, so check the finish in practice before relying on it for a PB.
