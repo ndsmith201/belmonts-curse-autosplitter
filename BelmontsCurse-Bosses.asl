@@ -1,9 +1,9 @@
 // Castlevania: Belmont's Curse -- ten-boss route, Windows Steam build 1.1.3.
-// Reads boss progression and final Dracula HP; does not write to the game or saves.
+// Reads boss progression and final Dracula HP without writing to the game's memory or save files.
 // A new save arms auto-start; the first accepted movement input starts timing.
 // Reset manually between attempts.
 // Use the accompanying ten-segment .lss file and enable Starting in the layout.
-// Talos-first and Carmilla-first routes are detected from the loaded split names.
+// The saved route ID maps boss positions independently of displayed split names.
 // Game Time removes loading screens; Real Time is also recorded by LiveSplit.
 // GameAssembly.dll SHA256: 4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152
 // Defeat GUIDs were extracted from this installed build's actual assets.
@@ -13,6 +13,9 @@ state("Castlevania Belmont's Curse") {}
 startup
 {
     refreshRate = 30;
+    settings.Add("legacy_talos_first", false, "Older renamed file: Talos before Carmilla");
+    settings.Add("legacy_carmilla_first", false, "Older renamed file: Carmilla before Talos");
+    vars.routeChoice = 0;
     vars.names = new string[] {
         "The Fallen", "Joan", "Medusa", "Death 1", "Isaac 1",
         "Talos", "Carmilla", "Death 2", "Isaac 2", "Dracula"
@@ -31,22 +34,59 @@ startup
     };
     vars.idBits = new Dictionary<string, int>();
     for (int i = 0; i < 10; i++) vars.idBits.Add(vars.ids[i], 1 << i);
-    // GUID bits stay canonical; only the segment-to-boss mapping changes.
-    // Validate the entire route so another permutation cannot split the wrong boss.
+    // The permanent run marker survives rename, Save As, reset and reload.
+    // Display labels never override a saved route or identify individual bosses.
     vars.routeForRun = (Func<int[]>)(() => {
         if (timer.Run == null || timer.Run.Count != 10) return null;
+        const string key = "BelmontsCurse.Route";
+        string routeName = null;
+        CustomVariable marker;
+        if (timer.Run.Metadata.CustomVariables.TryGetValue(key, out marker))
+        {
+            if (marker == null || (marker.Value != "TalosFirst" && marker.Value != "CarmillaFirst"))
+                return null;
+            routeName = marker.Value;
+            if (!marker.IsPermanent)
+            {
+                timer.Run.Metadata.CustomVariables[key] = marker.AsPermanent();
+                timer.Run.HasChanged = true;
+            }
+        }
+        else
+        {
+            if ((int)vars.routeChoice < 0) return null;
+            if ((int)vars.routeChoice == 1) routeName = "TalosFirst";
+            else if ((int)vars.routeChoice == 2) routeName = "CarmillaFirst";
+            else
+            {
+                // Migrate older files before their labels are edited. Existing
+                // explicitly named route categories also identify renamed files.
+                Func<int[], bool> legacyNamesMatch = candidate => {
+                    for (int i = 0; i < 10; i++)
+                        if (!String.Equals((timer.Run[i].Name ?? "").Trim(), (string)vars.names[candidate[i]],
+                            StringComparison.OrdinalIgnoreCase)) return false;
+                    return true;
+                };
+                if (legacyNamesMatch(new int[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 })) routeName = "TalosFirst";
+                else if (legacyNamesMatch(new int[] { 0, 1, 2, 3, 4, 6, 5, 7, 8, 9 })) routeName = "CarmillaFirst";
+                else if (String.Equals((timer.Run.CategoryName ?? "").Trim(), "Boss Route (Talos First)", StringComparison.OrdinalIgnoreCase))
+                    routeName = "TalosFirst";
+                else if (String.Equals((timer.Run.CategoryName ?? "").Trim(), "Boss Route (Carmilla First)", StringComparison.OrdinalIgnoreCase))
+                    routeName = "CarmillaFirst";
+            }
+            if (routeName == null) return null;
+            timer.Run.Metadata.CustomVariables[key] = new CustomVariable(routeName, true);
+            timer.Run.HasChanged = true;
+        }
         int[] order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-        if (String.Equals((timer.Run[5].Name ?? "").Trim(), "Carmilla", StringComparison.OrdinalIgnoreCase))
+        if (routeName == "CarmillaFirst")
         {
             order[5] = 6;
             order[6] = 5;
         }
-        for (int i = 0; i < 10; i++)
-            if (!String.Equals((timer.Run[i].Name ?? "").Trim(), (string)vars.names[order[i]],
-                StringComparison.OrdinalIgnoreCase)) return null;
         return order;
     });
-    vars.routeValid = false;
+    vars.routeValid = vars.routeForRun() != null;
     vars.resetDracula = (Action)(() => {
         vars.draculaEntity = 0L;
         vars.draculaStat = 0L;
@@ -581,6 +621,9 @@ update
     vars.startRequested = false;
     vars.valid = false;
     if (!vars.supported) return false;
+    bool legacyTalos = (bool)settings["legacy_talos_first"];
+    bool legacyCarmilla = (bool)settings["legacy_carmilla_first"];
+    vars.routeChoice = legacyTalos ? (legacyCarmilla ? -1 : 1) : (legacyCarmilla ? 2 : 0);
     int[] route = vars.routeForRun();
     bool previousRouteValid = vars.routeValid;
     vars.routeValid = route != null;
@@ -763,7 +806,7 @@ update
         int previous = vars.mask;
         vars.mask = mask;
         vars.valid = true;
-        vars.status = route == null ? "Load a supported Talos-first or Carmilla-first split route" : "Reading live boss flags";
+        vars.status = route == null ? "Load a supported ten-split route or choose the order for an older renamed file" : "Reading live boss flags";
         if (vars.baselineNeeded || (previous & ~mask) != 0)
         {
             // Attach, player replacement, failed reads and save rollback must
