@@ -71,4 +71,8 @@ Built for the verified **Steam 1.1.3** game binary and **LiveSplit 1.8.25 on 64-
 
 The script checks `GameAssembly.dll` before using its offsets. A changed game binary requires an updated script.
 
-Both route orders passed ten-boss checks in LiveSplit's native ASL engine, along with movement-start, loading-pause, and zero-HP safety checks. The health reader also correctly excluded first-form Dracula at zero HP in a live game. The route files and all portraits were loaded and rendered with LiveSplit. A final-beast killing hit and a complete ten-boss run have not yet been verified live, so check the finish in practice before relying on it for a PB.
+Both route orders passed ten-boss checks in LiveSplit's native ASL engine, along with movement-start, loading-pause, and zero-HP safety checks. The route files and all portraits were loaded and rendered with LiveSplit.
+
+**The final-beast finish is verified live.** During a real fight, the published script ended an independent LiveSplit test timer at **0 HP**, while Dracula's defeat flag was still unset. Live checks also confirmed that first-form Dracula at zero HP is ignored and that the beast's temporary 1-HP protection does not cause an early finish. The test only read game memory and did not change the game or the user's saved splits.
+
+A complete ten-boss run has not yet been verified live, so check the route in practice before relying on it for a PB.
