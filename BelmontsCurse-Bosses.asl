@@ -4,7 +4,7 @@
 // Reset manually between attempts.
 // Use the accompanying ten-segment .lss file and enable Starting in the layout.
 // The saved route ID maps boss positions independently of displayed split names.
-// Game Time removes loading screens; Real Time is also recorded by LiveSplit.
+// Game Time removes visible room loads and red/gold loading artwork; LiveSplit also records Real Time.
 // GameAssembly.dll SHA256: 4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152
 // Defeat GUIDs were extracted from this installed build's actual assets.
 
@@ -116,6 +116,9 @@ startup
     vars.lastSaveObject = 0L;
     vars.loading = false;
     vars.loadingValid = false;
+    vars.loadingArtworkFlowActive = false;
+    vars.loadingArtworkFlowKnown = true;
+    vars.fullLoadingScreenSnapshot = (Func<bool?>)(() => null);
     timer.CurrentTimingMethod = TimingMethod.GameTime;
     vars.saveStatus = "Waiting to observe the current save";
     vars.status = "Waiting for the game";
@@ -218,53 +221,24 @@ init
     });
     vars.loadingSnapshot = (Func<bool>)(() => {
         bool unknown = false;
-        try
-        {
-        // AFM begins loading before the next scene/player is ready.
-        long afmType = vars.ptr((long)vars.baseAddress + 0x3F5F570);
-        if (afmType >= 0x10000 && (afmType & 7) == 0)
-        {
-            long fields = vars.ptr(afmType + 0xB8);
-            if (fields != 0 && vars.loadingFlag(fields)) return true;
-        }
-        }
-        catch { unknown = true; }
-        try
-        {
-        // The game's loading state lasts through the final reveal, after
-        // AFM.IsLoading clears. Verified against two live fast travels.
-        long gameType = vars.ptr((long)vars.baseAddress + 0x3F23D78);
-        if (gameType >= 0x10000 && (gameType & 7) == 0)
-        {
-            long fields = vars.ptr(gameType + 0xB8);
-            long manager = fields == 0 ? 0L : (long)vars.ptr(fields);
-            if (manager != 0)
-            {
-                long loadingState = vars.ptr(manager + 0x68);
-                long states = vars.ptr(manager + 0xA0);
-                if (states != 0 && loadingState != 0)
-                {
-                    int count = vars.i32(states + 0x18);
-                    if (count < 0 || count > 128) throw new Exception("Invalid game state stack");
-                    if (count > 0)
-                    {
-                        long items = vars.ptr(states + 0x10);
-                        if (count > vars.i32(items + 0x18)) throw new Exception("Incomplete game state stack");
-                        long top = vars.ptr(items + 0x20 + (count - 1) * 8);
-                        if (top != 0 && vars.ptr(top + 0x18) == loadingState) return true;
-                    }
-                }
-            }
-        }
-        }
-        catch { unknown = true; }
-        // Room transitions have a separate visible loading icon. The engine's
-        // background room-prefetch flag is deliberately not used here.
+        // Keep room-to-room loading removal independent of the full-screen UI.
         try { if ((bool)vars.roomLoadingVisible(0x3F082C8L)) return true; }
         catch { unknown = true; }
         try { if ((bool)vars.roomLoadingVisible(0x3F08390L)) return true; }
         catch { unknown = true; }
-        if (unknown) throw new Exception("Loading screen data is temporarily unavailable");
+        try
+        {
+            // Menu/save loads count only while their loading artwork is visible.
+            // Engine loading flags can extend before/after that screen and must
+            // never start or prolong a pause on their own.
+            bool? visible = vars.fullLoadingScreenSnapshot();
+            if (visible.HasValue)
+            {
+                if (visible.Value) return true;
+            }
+        }
+        catch { unknown = true; }
+        if (unknown) throw new Exception("Visible loading-screen data is temporarily unavailable");
         return false;
     });
     vars.saveSnapshot = (Func<object[]>)(() => {
@@ -304,6 +278,283 @@ init
         int end = Array.IndexOf(bytes, (byte)0);
         return end < 0 ? "" : Encoding.ASCII.GetString(bytes, 0, end);
     });
+    // Install in init after read/ptr/i32. Exact installed Steam1.1.3 native layouts.
+    // Timing uses the actual red/gold ScreenContent AND its loading camera only.
+    // Bats, application-launch black screens, videos and NoRose fades are excluded.
+    // Flow flags below are diagnostics for boss rebaselining, NEVER timing inputs.
+    vars.loadingArtworkFlowActive = false;
+    vars.loadingArtworkFlowKnown = false;
+    vars.artworkBudget = new int[] { 0 };
+    vars.artworkClassNames = new Dictionary<long, string>();
+    vars.artworkBindings = new Dictionary<long, long[]>();
+    vars.artworkName = (Func<long, string>)(obj => {
+        long klass = vars.ptr(obj);
+        if (klass < 0x10000 || (klass & 7) != 0) throw new Exception("Invalid artwork object type");
+        string name;
+        if (!vars.artworkClassNames.TryGetValue(klass, out name)) {
+            byte[] bytes = vars.read(vars.ptr(klass + 0x10), 96);
+            int end = Array.IndexOf(bytes, (byte)0);
+            if (end <= 0) throw new Exception("Invalid artwork type name");
+            name = Encoding.ASCII.GetString(bytes, 0, end);
+            vars.artworkClassNames[klass] = name;
+        }
+        return name;
+    });
+    vars.artworkString = (Func<long, string>)(obj => {
+        if (obj == 0) return "";
+        int count = vars.i32(obj + 0x10);
+        if (count < 0 || count > 512) throw new Exception("Invalid artwork string");
+        return Encoding.Unicode.GetString(vars.read(obj + 0x14, count * 2));
+    });
+    vars.artworkNativeName = (Func<long, string>)(native => {
+        long name = vars.ptr(native + 0x60);
+        if (name < 0x10000) throw new Exception("Invalid artwork GameObject name");
+        byte[] bytes = vars.read(name, 96);
+        int end = Array.IndexOf(bytes, (byte)0);
+        if (end < 0) throw new Exception("Unterminated artwork GameObject name");
+        return Encoding.UTF8.GetString(bytes, 0, end);
+    });
+    vars.artworkList = (Func<long, long[]>)(list => {
+        if (list == 0) return new long[0];
+        long items = vars.ptr(list + 0x10);
+        int count = vars.i32(list + 0x18), stamp = vars.i32(list + 0x1C);
+        if (count < 0 || count > 128 || (count > 0 && (items == 0 || vars.i32(items + 0x18) < count)))
+            throw new Exception("Invalid artwork source list");
+        byte[] data = count == 0 ? new byte[0] : (byte[])vars.read(items + 0x20, count * 8);
+        long[] result = new long[count];
+        for (int i = 0; i < count; i++) result[i] = BitConverter.ToInt64(data, i * 8);
+        if (items != vars.ptr(list + 0x10) || count != vars.i32(list + 0x18) || stamp != vars.i32(list + 0x1C))
+            throw new Exception("Artwork source list changed");
+        return result;
+    });
+    vars.artworkTargets = (Func<long, long[]>)(callback => {
+        if (callback == 0) return new long[0];
+        long calls = vars.ptr(callback + 0x78);
+        int count = calls == 0 ? 1 : (int)vars.i32(calls + 0x18);
+        if (count < 0 || count > 128) throw new Exception("Invalid artwork delegates");
+        long[] result = new long[count];
+        for (int i = 0; i < count; i++) {
+            long call = calls == 0 ? callback : (long)vars.ptr(calls + 0x20 + i * 8);
+            result[i] = call == 0 ? 0L : (long)vars.ptr(call + 0x20);
+        }
+        if (calls != vars.ptr(callback + 0x78)) throw new Exception("Artwork delegates changed");
+        return result;
+    });
+    vars.artworkRegistry = (Func<long, string, long[]>)((rva, requiredKey) => {
+        long type = vars.ptr((long)vars.baseAddress + rva);
+        if (type < 0x10000 || (type & 7) != 0) return new long[0];
+        long fields = vars.ptr(type + 0xB8), registry = fields == 0 ? 0L : (long)vars.ptr(fields);
+        if (registry == 0) return new long[0];
+        long dictionary = vars.ptr(registry + 0x10), entries = vars.ptr(dictionary + 0x18);
+        int count = vars.i32(dictionary + 0x20), stamp = vars.i32(dictionary + 0x2C);
+        if (count < 0 || count > 128 || (count > 0 && (entries == 0 || vars.i32(entries + 0x18) < count)))
+            throw new Exception("Invalid artwork registry");
+        var result = new List<long>();
+        for (int i = 0; i < count; i++) {
+            long entry = entries + 0x20 + i * 24;
+            if (vars.i32(entry) < 0) continue;
+            if (requiredKey != "" && (string)vars.artworkString((long)vars.ptr(entry + 8)) != requiredKey) continue;
+            long holder = vars.ptr(entry + 0x10);
+            if (holder != 0) result.Add(holder);
+        }
+        if (entries != vars.ptr(dictionary + 0x18) || count != vars.i32(dictionary + 0x20)
+            || stamp != vars.i32(dictionary + 0x2C) || dictionary != vars.ptr(registry + 0x10)
+            || registry != vars.ptr(fields)) throw new Exception("Artwork registry changed");
+        return result.ToArray();
+    });
+    // Native hierarchy lookup is scoped to ONE exact LoadingScreen root, not the world.
+    // Verified getters: GO.transform=ptr(ptr(GO+30)+8); parent+90; children+70/count80.
+    vars.artworkFindContent = (Func<long, long>)(managerNative => {
+        long owner = vars.ptr(managerNative + 0x30);
+        if (owner < 0x10000) throw new Exception("Loading camera manager has no GameObject");
+        long transform = vars.ptr(vars.ptr(owner + 0x30) + 8), root = 0;
+        for (int depth = 0; transform != 0 && depth < 16; depth++) {
+            long go = vars.ptr(transform + 0x30);
+            string name = vars.artworkNativeName(go);
+            if (name == "LoadingScreen" || name == "LoadingScreenMainMenu") { root = transform; break; }
+            long parent = vars.ptr(transform + 0x90);
+            if (parent == transform) throw new Exception("Cyclic loading hierarchy");
+            transform = parent;
+        }
+        if (root == 0) return 0L;
+        var pending = new Stack<long>(); var seen = new HashSet<long>();
+        pending.Push(root); long content = 0;
+        while (pending.Count > 0) {
+            long item = pending.Pop();
+            if (!seen.Add(item)) continue;
+            if (seen.Count > 256) throw new Exception("Artwork hierarchy budget exceeded");
+            long go = vars.ptr(item + 0x30);
+            if ((string)vars.artworkNativeName(go) == "ScreenContent") {
+                if (content != 0 && content != go) throw new Exception("Ambiguous loading artwork");
+                content = go;
+            }
+            long children = vars.ptr(item + 0x70); int count = vars.i32(item + 0x80);
+            if (count < 0 || count > 128 || (count > 0 && children < 0x10000)) throw new Exception("Invalid artwork children");
+            for (int i = 0; i < count; i++) pending.Push((long)vars.ptr(children + i * 8));
+            if (children != vars.ptr(item + 0x70) || count != vars.i32(item + 0x80)) throw new Exception("Artwork hierarchy changed");
+        }
+        return content;
+    });
+    vars.artworkLearnManager = (Func<long, long, bool>)((manager, knownContent) => {
+        if (manager == 0 || (string)vars.artworkName(manager) != "LoadingScreenCameraManager") return false;
+        long klass = vars.ptr(manager), native = vars.ptr(manager + 0x10);
+        if (native == 0) return false;
+        if (native < 0x10000 || (native & 7) != 0) throw new Exception("Invalid loading camera manager");
+        long camera = vars.ptr(manager + 0x30);
+        if (camera == 0 || (string)vars.artworkName(camera) != "Camera") throw new Exception("Invalid loading artwork camera");
+        long cameraClass = vars.ptr(camera), cameraNative = vars.ptr(camera + 0x10);
+        if (cameraNative == 0) return false;
+        long[] previous;
+        if (vars.artworkBindings.TryGetValue(manager, out previous) && previous[0] == klass && previous[1] == native
+            && previous[2] == camera && previous[3] == cameraClass && previous[4] == cameraNative
+            && (knownContent == 0 || knownContent == previous[5])) {
+            bool contentValid = false;
+            try { contentValid = vars.ptr(previous[5]) == previous[6] && vars.ptr(previous[5] + 0x60) == previous[7]
+                && (string)vars.artworkNativeName(previous[5]) == "ScreenContent"; } catch { }
+            if (contentValid) return false;
+        }
+        long content = knownContent == 0 ? (long)vars.artworkFindContent(native) : knownContent;
+        if (content == 0) return false;
+        if ((string)vars.artworkNativeName(content) != "ScreenContent") throw new Exception("Unverified artwork GameObject");
+        if (klass != vars.ptr(manager) || native != vars.ptr(manager + 0x10)
+            || camera != vars.ptr(manager + 0x30) || cameraNative != vars.ptr(camera + 0x10))
+            throw new Exception("Loading artwork binding changed");
+        vars.artworkBindings[manager] = new long[] { klass, native, camera, cameraClass, cameraNative, content, vars.ptr(content), vars.ptr(content + 0x60) };
+        return true;
+    });
+    // Immutable scene events explicitly pair ScreenContent.SetActive(true) and camera enable.
+    vars.artworkEvent = (Func<long, bool>)(ev => {
+        if (ev == 0) return false;
+        long group = vars.ptr(ev + 0x18);
+        if (group == 0) return false;
+        long content = 0; var managers = new List<long>();
+        foreach (long call in (long[])vars.artworkList((long)vars.ptr(group + 0x10))) {
+            if (call == 0 || vars.i32(call + 0x38) == 0) continue;
+            long target = vars.ptr(call + 0x10);
+            if (target == 0) continue;
+            string method = vars.artworkString((long)vars.ptr(call + 0x20));
+            string name = vars.artworkName(target);
+            if (name == "LoadingScreenCameraManager" && method == "EnableLoadingScreenCamera") managers.Add(target);
+            if (name == "GameObject" && method == "SetActive") {
+                long args = vars.ptr(call + 0x30), native = vars.ptr(target + 0x10);
+                if (args != 0 && native != 0 && vars.read(args + 0x30, 1)[0] == 1
+                    && (string)vars.artworkNativeName(native) == "ScreenContent") content = native;
+            }
+        }
+        if (content != 0) foreach (long manager in managers) vars.artworkLearnManager(manager, content);
+        return true;
+    });
+    vars.artworkGraph = (Func<long, int, bool>)((node, depth) => {
+        if (node == 0) return false;
+        if (depth > 8 || --vars.artworkBudget[0] < 0) throw new Exception("Artwork graph budget exceeded");
+        string name = vars.artworkName(node);
+        if (name == "LoadingScreenTransitionSequence") {
+            long events = vars.ptr(node + 0x20); int count = events == 0 ? 0 : (int)vars.i32(events + 0x18);
+            if (count < 0 || count > 64) throw new Exception("Invalid artwork events");
+            for (int i = 0; i < count; i++) vars.artworkEvent((long)vars.ptr(events + 0x20 + i * 16 + 8));
+            long items = vars.ptr(node + 0x18); count = items == 0 ? 0 : (int)vars.i32(items + 0x18);
+            if (count < 0 || count > 64) throw new Exception("Invalid artwork transitions");
+            for (int i = 0; i < count; i++) vars.artworkGraph((long)vars.ptr(items + 0x20 + i * 8), depth + 1);
+        } else if (name == "LoadingScreenTransitionDebug") {
+            vars.artworkEvent((long)vars.ptr(node + 0x20)); vars.artworkEvent((long)vars.ptr(node + 0x28));
+        }
+        return true;
+    });
+    vars.artworkController = (Func<long, int, bool>)((obj, depth) => {
+        if (obj == 0) return false;
+        if (depth > 8 || --vars.artworkBudget[0] < 0) throw new Exception("Artwork controller budget exceeded");
+        string name = vars.artworkName(obj);
+        if (name == "LoadingScreenBranchController") vars.artworkController((long)vars.ptr(obj + 0x38), depth + 1);
+        else if (name == "LoadingScreenTransitionsController" && vars.ptr(obj + 0x10) != 0)
+            vars.artworkGraph((long)vars.ptr(obj + 0x30), 0);
+        // NoRose's LoadingScreenFadeController has no red/gold LOADING artwork.
+        return true;
+    });
+    vars.artworkTask = (Func<long, int, bool>)((task, depth) => {
+        if (task == 0) return false;
+        if (depth > 12 || --vars.artworkBudget[0] < 0) throw new Exception("Artwork task budget exceeded");
+        string name = vars.artworkName(task);
+        if (name == "TaskSequence") foreach (long child in (long[])vars.artworkList((long)vars.ptr(task + 0x10))) vars.artworkTask(child, depth + 1);
+        else if (name == "WaitForLoadingScreenUnloadTask") vars.artworkController((long)vars.ptr(task + 0x10), 0);
+        return true;
+    });
+    vars.loadingArtworkSnapshot = (Func<bool>)(() => {
+        vars.artworkBudget[0] = 512; vars.loadingArtworkFlowKnown = false;
+        long afm = 0;
+        foreach (long holder in (long[])vars.artworkRegistry(0x3F24238L, "ScrVar_GameManagement_ApplicationFlowManager")) {
+            long candidate = vars.ptr(holder + 0x10);
+            if (candidate != 0 && (string)vars.artworkName(candidate) == "ApplicationFlowManager" && vars.ptr(candidate + 0x10) != 0) afm = candidate;
+        }
+        bool scenePresent = false;
+        if (afm != 0) {
+            long sceneManager = vars.ptr(afm + 0x30);
+            long[] lists = new long[2]; int[] counts = new int[2], stamps = new int[2];
+            for (int n = 0; n < 2; n++) {
+                long list = vars.ptr(sceneManager + 0x10 + n * 8); lists[n] = list;
+                if (list != 0) { counts[n] = vars.i32(list + 0x18); stamps[n] = vars.i32(list + 0x1C); }
+                foreach (long scene in (long[])vars.artworkList(list)) {
+                    long wrapper = vars.ptr(scene + 0x20);
+                    string path = vars.artworkString((long)vars.ptr(wrapper + 0x18));
+                    if (path.IndexOf("/LoadingScreen/", StringComparison.OrdinalIgnoreCase) >= 0) scenePresent = true;
+                }
+            }
+            for (int n = 0; n < 2; n++) if (lists[n] != (long)vars.ptr(sceneManager + 0x10 + n * 8)
+                || (lists[n] != 0 && (counts[n] != (int)vars.i32(lists[n] + 0x18) || stamps[n] != (int)vars.i32(lists[n] + 0x1C))))
+                throw new Exception("Artwork flow scene lists changed");
+            if (sceneManager != (long)vars.ptr(afm + 0x30)) throw new Exception("Artwork flow manager changed");
+        }
+        long afmType = vars.ptr((long)vars.baseAddress + 0x3F5F570);
+        bool engineLoading = false;
+        if (afmType >= 0x10000 && (afmType & 7) == 0) {
+            long fields = vars.ptr(afmType + 0xB8);
+            if (fields != 0) engineLoading = vars.read(fields, 1)[0] == 1;
+        }
+        vars.loadingArtworkFlowActive = scenePresent || engineLoading;
+        vars.loadingArtworkFlowKnown = true;
+        bool unknown = false;
+        if (afm != 0) try {
+            foreach (long target in (long[])vars.artworkTargets((long)vars.ptr(afm + 0x40))) vars.artworkController(target, 0);
+            long runner = vars.ptr(afm + 0x68);
+            if (runner != 0) foreach (long task in (long[])vars.artworkList((long)vars.ptr(runner + 0x10))) vars.artworkTask(task, 0);
+        } catch { unknown = true; }
+        // This persistent variable listener exists throughout entry/opaque/exit,
+        // including cold attachment after onEndLoadState removed its controller.
+        try {
+            foreach (long holder in (long[])vars.artworkRegistry(0x3F244C0L, "ScrVar_GameManagement_MainCamera"))
+                foreach (long target in (long[])vars.artworkTargets((long)vars.ptr(holder + 0x18))) vars.artworkLearnManager(target, 0L);
+        } catch { unknown = true; }
+        bool visible = false;
+        foreach (long manager in ((Dictionary<long, long[]>)vars.artworkBindings).Keys.ToArray()) {
+            long[] row = vars.artworkBindings[manager];
+            try {
+                if (vars.ptr(manager) != row[0] || vars.ptr(manager + 0x10) != row[1] || vars.ptr(row[2]) != row[3]
+                    || vars.ptr(row[2] + 0x10) != row[4] || row[4] == 0) { vars.artworkBindings.Remove(manager); continue; }
+                if (vars.ptr(manager + 0x30) != row[2]) throw new Exception("Artwork camera changed");
+                if (vars.ptr(row[5]) != row[6] || vars.ptr(row[5] + 0x60) != row[7]
+                    || (string)vars.artworkNativeName(row[5]) != "ScreenContent") throw new Exception("Artwork GameObject changed");
+                byte enabled = vars.read(row[4] + 0x38, 1)[0];
+                byte self = vars.read(row[5] + 0x56, 1)[0];
+                if (enabled > 1 || self > 1) throw new Exception("Invalid artwork visibility");
+                if (enabled == 0 || self == 0) continue;
+                byte hierarchy = vars.read(row[5] + 0x57, 1)[0];
+                if (hierarchy > 1) throw new Exception("Artwork hierarchy visibility is unresolved");
+                long cameraGO = vars.ptr(row[4] + 0x30);
+                byte cameraHierarchy = vars.read(cameraGO + 0x57, 1)[0];
+                if (cameraHierarchy > 1) throw new Exception("Artwork camera hierarchy is unresolved");
+                if (vars.ptr(manager + 0x10) != row[1] || vars.ptr(row[2] + 0x10) != row[4]
+                    || enabled != vars.read(row[4] + 0x38, 1)[0] || self != vars.read(row[5] + 0x56, 1)[0]
+                    || hierarchy != vars.read(row[5] + 0x57, 1)[0] || cameraGO != vars.ptr(row[4] + 0x30)
+                    || cameraHierarchy != vars.read(cameraGO + 0x57, 1)[0]) throw new Exception("Artwork visibility changed during sample");
+                if (hierarchy == 1 && cameraHierarchy == 1) visible = true;
+            } catch { if (!scenePresent) vars.artworkBindings.Remove(manager); else unknown = true; }
+        }
+        if (visible) return true;
+        if (unknown && scenePresent) throw new Exception("Loading artwork sample is unstable");
+        return false;
+    });
+    // Compatibility alias for the existing room-icon OR artwork wrapper. No fallback.
+    vars.fullLoadingScreenSnapshot = (Func<bool?>)(() => (bool)vars.loadingArtworkSnapshot());
+
     // Final-form reader: null means no encounter; exceptions mark an unstable sample.
     // Samples contain entity, current StatObject, context, effective HP and max HP.
     vars.draculaClassNames = new Dictionary<long, string>();
@@ -323,7 +574,7 @@ init
     vars.draculaComponents = (Func<long, long[]>)(entity => {
         long cache = vars.ptr(entity + 0x30);
         long entries = vars.ptr(cache + 0x18);
-        int count = vars.i32(cache + 0x20), sampleVersion = vars.i32(cache + 0x24);
+        int count = vars.i32(cache + 0x20), sampleVersion = vars.i32(cache + 0x2C);
         if (count < 0 || count > 2048 || count > vars.i32(entries + 0x18))
             throw new Exception("Invalid final-boss component cache");
         long[] found;
@@ -346,7 +597,7 @@ init
         }
         if (entries != (long)vars.ptr(cache + 0x18)
             || count != (int)vars.i32(cache + 0x20)
-            || sampleVersion != (int)vars.i32(cache + 0x24))
+            || sampleVersion != (int)vars.i32(cache + 0x2C))
             throw new Exception("Final-boss component cache changed");
         if (found[0] != 0 && found[1] != 0 && found[2] != 0)
         {
@@ -444,7 +695,7 @@ init
                 || components[4] != (long)vars.ptr(entity + 0x30)
                 || components[5] != (long)vars.ptr(components[4] + 0x18)
                 || components[6] != (int)vars.i32(components[4] + 0x20)
-                || components[7] != (int)vars.i32(components[4] + 0x24)
+                || components[7] != (int)vars.i32(components[4] + 0x2C)
                 || entity != (long)vars.ptr(damageable + 0x48)
                 || mob != (long)vars.ptr(mobComponent + 0x20)
                 || currentRef != (long)vars.ptr(damageable + 0x20)
@@ -521,7 +772,7 @@ init
         long cache = vars.ptr(mc + 0x30);
         long entries = vars.ptr(cache + 0x18);
         int count = vars.i32(cache + 0x20);
-        int cacheVersion = vars.i32(cache + 0x24);
+        int cacheVersion = vars.i32(cache + 0x2C);
         if (count < 0 || count > 2048 || count > vars.i32(entries + 0x18))
             throw new Exception("Invalid input component dictionary");
         if (mc != (long)vars.inputEntity || cache != (long)vars.inputCache
@@ -558,7 +809,7 @@ init
             long indexMap = vars.ptr(indexCache + 0x10);
             long indexEntries = vars.ptr(indexMap + 0x18);
             int indexCount = vars.i32(indexMap + 0x20);
-            int indexVersion = vars.i32(indexMap + 0x24);
+            int indexVersion = vars.i32(indexMap + 0x2C);
             if (indexCount < 0 || indexCount > 2048 || indexCount > vars.i32(indexEntries + 0x18))
                 throw new Exception("Invalid component index dictionary");
             byte[] indices = vars.read(indexEntries + 0x20, indexCount * 0x10);
@@ -576,10 +827,10 @@ init
                 if (found[slot] && bits[slot] < 0) throw new Exception("Input component index is not ready");
             if (indexEntries != (long)vars.ptr(indexMap + 0x18)
                 || indexCount != (int)vars.i32(indexMap + 0x20)
-                || indexVersion != (int)vars.i32(indexMap + 0x24)
+                || indexVersion != (int)vars.i32(indexMap + 0x2C)
                 || entries != (long)vars.ptr(cache + 0x18)
                 || count != (int)vars.i32(cache + 0x20)
-                || cacheVersion != (int)vars.i32(cache + 0x24))
+                || cacheVersion != (int)vars.i32(cache + 0x2C))
                 throw new Exception("Input component dictionaries changed during sample");
             vars.inputEntity = mc;
             vars.inputCache = cache;
@@ -605,7 +856,7 @@ init
                 & (1UL << (activeBits[slot] % 64))) != 0;
         if (!has(0) || has(1) || has(2)) return false;
         if (entries != (long)vars.ptr(cache + 0x18)
-            || cacheVersion != (int)vars.i32(cache + 0x24)
+            || cacheVersion != (int)vars.i32(cache + 0x2C)
             || vars.read(playerInput + 0x70, 1)[0] != 1 || !controlsReady())
             throw new Exception("Gameplay input changed during sample");
         return true;
@@ -631,6 +882,10 @@ update
     // Loading screens can replace or temporarily remove the player entity.
     // Read their state before the player; retain the last sample on a transient
     // read failure instead of treating missing player data as a loading screen.
+    bool previousLoading = vars.loading;
+    bool previousLoadingValid = vars.loadingValid;
+    bool previousLoadingFlow = vars.loadingArtworkFlowActive;
+    bool previousLoadingFlowKnown = vars.loadingArtworkFlowKnown;
     try
     {
         vars.loading = (bool)vars.loadingSnapshot();
@@ -640,6 +895,13 @@ update
     {
         vars.loadingValid = false;
     }
+    // Loaded saves can populate progression after the new player first appears.
+    // The bat-curtain tail counts on the clock, but save flags can still be
+    // restored there. Keep progression baselining separate from timing removal.
+    if (vars.loading || !vars.loadingValid || previousLoading || !previousLoadingValid
+        || vars.loadingArtworkFlowActive || !vars.loadingArtworkFlowKnown
+        || previousLoadingFlow || !previousLoadingFlowKnown)
+        vars.baselineNeeded = true;
     // Save creation happens before an MC entity is available. Observe it
     // independently, including while an attempt is running or already ended.
     bool saveValid = false;
@@ -693,7 +955,8 @@ update
     int finalIndex = timer.CurrentSplitIndex;
     if (route == null || timer.CurrentPhase != TimerPhase.Running
         || finalIndex < 0 || finalIndex >= 10 || route[finalIndex] != 9
-        || !vars.loadingValid || vars.loading || (((int)vars.firedMask & (1 << 9)) != 0))
+        || !vars.loadingValid || vars.loading || vars.loadingArtworkFlowActive
+        || !vars.loadingArtworkFlowKnown || (((int)vars.firedMask & (1 << 9)) != 0))
         vars.resetDracula();
     else if (saveValid)
     {
@@ -718,7 +981,8 @@ update
                 if (sameEncounter && vars.draculaPositive && health == 0)
                 {
                     // Recheck loading at the killing hit, not a later defeat flag.
-                    if ((bool)vars.loadingSnapshot()) vars.resetDracula();
+                    if ((bool)vars.loadingSnapshot() || vars.loadingArtworkFlowActive
+                        || !vars.loadingArtworkFlowKnown) vars.resetDracula();
                     else vars.draculaTrigger = true;
                 }
                 vars.draculaEntity = entity;

@@ -57,9 +57,13 @@ For a custom route, open **Edit Layout → Scriptable Auto Splitter**, turn off 
 
 - **Auto-start:** a newly created save arms the timer. Holding a direction through the opening starts timing when the game first accepts movement. Jump or attack alone does not start it.
 - **Existing saves:** loading an existing save does not arm or start the timer. Attaching during an already-created new-save intro does not trigger a late start.
-- **Game Time:** loading screens pause the clock automatically. Normal menus do not pause it. The script and included layout use Game Time; LiveSplit also records Real Time.
-- **Boss splits:** the first nine bosses split when their live defeat flags appear. Dracula finishes the run when his final beast form's health drops from above zero to **0 HP**. Keep all ten positions in your selected route's boss order and keep the timer running during boss defeats. Labels can be changed freely. Previously defeated bosses are ignored when attaching or starting. Other route orders are not supported.
+- **Game Time:** room-to-room loading still pauses the clock. When quitting to the main menu or loading a save, the clock pauses only while the full-screen red-and-gold **Loading** artwork is displayed. Time before that artwork appears, after it disappears, and in normal menus counts normally. The script and included layout use Game Time; LiveSplit also records Real Time.
+- **Boss splits:** the first nine bosses split when their live defeat flags appear. Dracula finishes the run when his final beast form's health drops from above zero to **0 HP**. Keep all ten positions in your selected route's boss order and keep the timer running during boss defeats. Labels can be changed freely. Previously defeated bosses are ignored when attaching, starting, or loading an existing save. Other route orders are not supported.
 - **Reset:** resets remain manual. Resetting on the same save does not rearm auto-start; create another new save for the next attempt.
+
+### Loading-screen boundaries
+
+Menu and save-loading removal follows the loading artwork's own visibility. Bat-curtain transitions before and after that artwork count normally. Engine loading flags, a prepared loading scene, and a missing player do not pause the clock by themselves. Visible room-loading icons independently pause the clock; background room prefetch does not. Boundaries are observed on the next script poll, at 30 samples per second.
 
 ## Boss order
 
@@ -85,6 +89,10 @@ Built for the verified **Steam 1.1.3** game binary and **LiveSplit 1.8.25 on 64-
 The script checks `GameAssembly.dll` before using its offsets. A changed game binary requires an updated script.
 
 Both route orders passed ten-boss checks in LiveSplit's native ASL engine, along with movement-start, loading-pause, and zero-HP safety checks. The route files and all portraits were loaded and rendered with LiveSplit.
+
+Loading checks use an independent test timer. Native tests cover separate room and full-screen visibility, normal menu time, background loading flags, transient read failures, and restored boss flags appearing during loading without causing a split.
+
+A live quit-and-reload check confirmed the artwork boundaries within one script poll. The timer counted the bat-only quit transition, the main-menu wait, and the final bat exit; it excluded about four seconds while the loading artwork was displayed. Reloading caused no historical boss splits. A separate reader also found the actual visible artwork with its cache cleared, verifying attachment during an existing load.
 
 Custom names were checked on both routes, including duplicate, blank, and non-English labels. Native clone, save, and reload checks preserved the route, PBs, best segments, and history. The route ID does not appear in the layout title.
 
