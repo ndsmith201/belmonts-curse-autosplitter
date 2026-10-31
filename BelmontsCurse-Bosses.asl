@@ -1,9 +1,9 @@
-// Castlevania: Belmont's Curse -- ten-boss route, Windows Steam build 1.1.3.
+// Castlevania: Belmont's Curse -- selectable boss events, Windows Steam build 1.1.3.
 // Reads boss progression and final Dracula HP without writing to the game's memory or save files.
 // A new save arms auto-start; the first accepted movement input starts timing.
 // Reset manually between attempts.
-// Use the accompanying ten-segment .lss file and enable Starting in the layout.
-// The saved route ID maps boss positions independently of displayed split names.
+// Select boss events in the ASL settings; each selected event advances the current row.
+// Split names are cosmetic. Keep labels in the expected gameplay order; no tags are needed.
 // Game Time removes visible room loads and red/gold loading artwork; LiveSplit also records Real Time.
 // GameAssembly.dll SHA256: 4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152
 // Defeat GUIDs were extracted from this installed build's actual assets.
@@ -13,87 +13,41 @@ state("Castlevania Belmont's Curse") {}
 startup
 {
     refreshRate = 30;
-    settings.Add("legacy_talos_first", false, "Older renamed file: Talos before Carmilla");
-    settings.Add("legacy_carmilla_first", false, "Older renamed file: Carmilla before Talos");
-    vars.routeChoice = 0;
-    vars.names = new string[] {
-        "The Fallen", "Joan", "Medusa", "Death 1", "Isaac 1",
-        "Talos", "Carmilla", "Death 2", "Isaac 2", "Dracula"
+    // CHECK CATALOG: stable setting/event keys, independent of displayed names.
+    vars.checkNames = new Dictionary<string, string> {
+        { "fallen", "The Fallen" }, { "joan", "Joan" }, { "medusa", "Medusa" },
+        { "death_1", "Death 1" }, { "isaac_1", "Isaac 1" },
+        { "talos", "Talos" }, { "carmilla", "Carmilla" },
+        { "death_2", "Death 2" }, { "isaac_2", "Isaac 2" }, { "dracula", "Dracula" }
     };
-    vars.ids = new string[] {
-        "20c378a72ad9c664686476a360b99777", // Leon / The Fallen
-        "641325fec3360bb459c879275fdee639", // Jeanne
-        "ac985fb3574b3cc4eadaf3a79793112e", // Medusa
-        "769b38ad62fa14249b54a74ef889998c", // DeathCatacombs
-        "99cd7d3d4e286c84da47e29d2fbb7e83", // IsaacIntro
-        "3c8796f7f58e2634eb4bcc8fe8a49746", // Talos
-        "4a7b39e0c582899409003620d44f5712", // Carmilla
-        "c94c4e1cc1f8dbf4fb525f2c6b94920c", // Death
-        "e47322c821f3eda4999f654f86dad494", // Isaac
-        "402628a8ae258e240a8fe5feca62e65d"  // DraculaBeast diagnostic; final split uses HP
+    // DETECTORS: progression GUID -> catalog key. Dracula uses live HP instead.
+    vars.flagChecks = new Dictionary<string, string> {
+        { "20c378a72ad9c664686476a360b99777", "fallen" },
+        { "641325fec3360bb459c879275fdee639", "joan" },
+        { "ac985fb3574b3cc4eadaf3a79793112e", "medusa" },
+        { "769b38ad62fa14249b54a74ef889998c", "death_1" },
+        { "99cd7d3d4e286c84da47e29d2fbb7e83", "isaac_1" },
+        { "3c8796f7f58e2634eb4bcc8fe8a49746", "talos" },
+        { "4a7b39e0c582899409003620d44f5712", "carmilla" },
+        { "c94c4e1cc1f8dbf4fb525f2c6b94920c", "death_2" },
+        { "e47322c821f3eda4999f654f86dad494", "isaac_2" }
     };
-    vars.idBits = new Dictionary<string, int>();
-    for (int i = 0; i < 10; i++) vars.idBits.Add(vars.ids[i], 1 << i);
-    // The permanent run marker survives rename, Save As, reset and reload.
-    // Display labels never override a saved route or identify individual bosses.
-    vars.routeForRun = (Func<int[]>)(() => {
-        if (timer.Run == null || timer.Run.Count != 10) return null;
-        const string key = "BelmontsCurse.Route";
-        string routeName = null;
-        CustomVariable marker;
-        if (timer.Run.Metadata.CustomVariables.TryGetValue(key, out marker))
-        {
-            if (marker == null || (marker.Value != "TalosFirst" && marker.Value != "CarmillaFirst"))
-                return null;
-            routeName = marker.Value;
-            if (!marker.IsPermanent)
-            {
-                timer.Run.Metadata.CustomVariables[key] = marker.AsPermanent();
-                timer.Run.HasChanged = true;
-            }
-        }
-        else
-        {
-            if ((int)vars.routeChoice < 0) return null;
-            if ((int)vars.routeChoice == 1) routeName = "TalosFirst";
-            else if ((int)vars.routeChoice == 2) routeName = "CarmillaFirst";
-            else
-            {
-                // Migrate older files before their labels are edited. Existing
-                // explicitly named route categories also identify renamed files.
-                Func<int[], bool> legacyNamesMatch = candidate => {
-                    for (int i = 0; i < 10; i++)
-                        if (!String.Equals((timer.Run[i].Name ?? "").Trim(), (string)vars.names[candidate[i]],
-                            StringComparison.OrdinalIgnoreCase)) return false;
-                    return true;
-                };
-                if (legacyNamesMatch(new int[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 })) routeName = "TalosFirst";
-                else if (legacyNamesMatch(new int[] { 0, 1, 2, 3, 4, 6, 5, 7, 8, 9 })) routeName = "CarmillaFirst";
-                else if (String.Equals((timer.Run.CategoryName ?? "").Trim(), "Boss Route (Talos First)", StringComparison.OrdinalIgnoreCase))
-                    routeName = "TalosFirst";
-                else if (String.Equals((timer.Run.CategoryName ?? "").Trim(), "Boss Route (Carmilla First)", StringComparison.OrdinalIgnoreCase))
-                    routeName = "CarmillaFirst";
-            }
-            if (routeName == null) return null;
-            timer.Run.Metadata.CustomVariables[key] = new CustomVariable(routeName, true);
-            timer.Run.HasChanged = true;
-        }
-        int[] order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-        if (routeName == "CarmillaFirst")
-        {
-            order[5] = 6;
-            order[6] = 5;
-        }
-        return order;
-    });
-    vars.routeValid = vars.routeForRun() != null;
+    // Native ASL settings are checkboxes. All ten boss events are on by default.
+    settings.Add("bosses", true, "Boss defeats");
+    foreach (var check in (Dictionary<string, string>)vars.checkNames)
+    {
+        string description = check.Key == "dracula" ? "Dracula: final beast reaches 0 HP"
+            : check.Key == "death_1" ? "Defeat Death 1 (Catacombs)"
+            : check.Key == "isaac_1" ? "Defeat Isaac 1 (first encounter)"
+            : "Defeat " + check.Value;
+        settings.Add("boss_" + check.Key, true, description, "bosses");
+    }
     vars.resetDracula = (Action)(() => {
         vars.draculaEntity = 0L;
         vars.draculaStat = 0L;
         vars.draculaContext = 0L;
         vars.draculaSave = 0L;
         vars.draculaPositive = false;
-        vars.draculaTrigger = false;
         vars.draculaValid = false;
         vars.draculaHealth = -1.0f;
         vars.draculaMaximum = -1.0f;
@@ -102,13 +56,54 @@ startup
     vars.resetDracula();
     // The live final-form reader is installed in init; null means no encounter.
     vars.draculaSnapshot = (Func<object[]>)(() => null);
-    vars.mask = 0;
+    // EVENT SELECTION: consume each observed event once per attempt, including
+    // unchecked progression events. The first selected event advances the row.
+    // No event backlog, name matching, or independent route cursor is needed.
+    vars.flags = new HashSet<string>();
+    vars.seenChecks = new HashSet<string>();
+    vars.enabledChecks = new HashSet<string>();
+    vars.observedRun = (object)timer.Run;
+    vars.segmentRevision = 0;
+    vars.sampleRevision = -1;
+    vars.sampleRun = (object)null;
+    vars.sampleSegment = (object)null;
+    vars.sampleIndex = -1;
+    vars.clearTrigger = (Action)(() => {
+        vars.triggerIndex = -1;
+        vars.triggerCheck = (string)null;
+        vars.triggerRun = (object)null;
+        vars.triggerSegment = (object)null;
+    });
+    vars.clearTrigger();
+    vars.invalidateSegment = (Action)(() => {
+        vars.segmentRevision = (int)vars.segmentRevision + 1;
+        vars.clearTrigger();
+        vars.resetDracula();
+    });
+    // ASL rewrites every bare return to return null, including inside lambdas.
+    // Use a value-returning delegate so its early exits stay valid C#.
+    vars.emitCheck = (Func<string, bool>)(key => {
+        if (!vars.seenChecks.Add(key)) return false;
+        if (!vars.enabledChecks.Contains(key) || vars.triggerCheck != null) return false;
+        int index = timer.CurrentSplitIndex;
+        if (timer.CurrentPhase != TimerPhase.Running || timer.Run == null
+            || index < 0 || index >= timer.Run.Count || index != (int)vars.sampleIndex
+            || (int)vars.sampleRevision != (int)vars.segmentRevision
+            || !Object.ReferenceEquals((object)timer.Run, (object)vars.sampleRun)
+            || !Object.ReferenceEquals((object)timer.Run[index], (object)vars.sampleSegment)) return false;
+        vars.triggerIndex = index;
+        vars.triggerCheck = key;
+        vars.triggerRun = (object)timer.Run;
+        vars.triggerSegment = (object)timer.Run[index];
+        return true;
+    });
+    // onSplit is an ASL action. Skip/undo require LiveSplit's native events.
+    vars.segmentChanged = (EventHandler)((sender, args) => vars.invalidateSegment());
+    timer.OnSkipSplit += vars.segmentChanged;
+    timer.OnUndoSplit += vars.segmentChanged;
     vars.valid = false;
     vars.supported = false;
     vars.baselineNeeded = true;
-    vars.firedMask = 0;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
@@ -129,8 +124,7 @@ init
     vars.resetDracula();
     vars.valid = false;
     vars.baselineNeeded = true;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
+    vars.clearTrigger();
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
@@ -559,6 +553,7 @@ init
     // Samples contain entity, current StatObject, context, effective HP and max HP.
     vars.draculaClassNames = new Dictionary<long, string>();
     vars.draculaComponentHandles = new Dictionary<long, long[]>();
+    vars.draculaComponentContext = 0L;
     vars.draculaClassName = (Func<long, string>)(obj => {
         long klass = vars.ptr(obj);
         string name;
@@ -572,6 +567,12 @@ init
         return name;
     });
     vars.draculaComponents = (Func<long, long[]>)(entity => {
+        long native = vars.ptr(entity + 0x10), context = vars.ptr(entity + 0x28);
+        if (context != (long)vars.draculaComponentContext)
+        {
+            vars.draculaComponentHandles.Clear();
+            vars.draculaComponentContext = context;
+        }
         long cache = vars.ptr(entity + 0x30);
         long entries = vars.ptr(cache + 0x18);
         int count = vars.i32(cache + 0x20), sampleVersion = vars.i32(cache + 0x2C);
@@ -579,15 +580,16 @@ init
             throw new Exception("Invalid final-boss component cache");
         long[] found;
         if (vars.draculaComponentHandles.TryGetValue(entity, out found)
-            && found[4] == cache && found[5] == entries && found[6] == count && found[7] == sampleVersion)
+            && found[4] == cache && found[5] == entries && found[6] == count && found[7] == sampleVersion
+            && found[8] == native && found[9] == context)
             return found;
         byte[] data = vars.read(entries + 0x20, count * 0x18);
-        found = new long[] { 0, 0, 0, 0, cache, entries, count, sampleVersion };
+        found = new long[] { 0, 0, 0, 0, cache, entries, count, sampleVersion, native, context };
         for (int i = 0; i < count; i++)
         {
             if (BitConverter.ToInt32(data, i * 0x18) < 0) continue;
             long component = BitConverter.ToInt64(data, i * 0x18 + 0x10);
-            if (component < 0x10000) continue;
+            if (component < 0x10000) { found[3] = 1; continue; }
             string name;
             try { name = vars.draculaClassName(component); }
             catch { found[3] = 1; continue; }
@@ -597,13 +599,20 @@ init
         }
         if (entries != (long)vars.ptr(cache + 0x18)
             || count != (int)vars.i32(cache + 0x20)
-            || sampleVersion != (int)vars.i32(cache + 0x2C))
+            || sampleVersion != (int)vars.i32(cache + 0x2C)
+            || native != (long)vars.ptr(entity + 0x10) || context != (long)vars.ptr(entity + 0x28))
             throw new Exception("Final-boss component cache changed");
         if (found[0] != 0 && found[1] != 0 && found[2] != 0)
         {
             found[3] = 0;
             vars.draculaComponentHandles[entity] = found;
         }
+        // Dracula can be selected for the whole run. Reuse fully classified
+        // non-boss dictionaries instead of rereading all their components at
+        // every poll. Unknown entries are retried; version/identity changes
+        // invalidate the classification, and context changes clear the cache.
+        else if (found[3] == 0 && native != 0 && context != 0)
+            vars.draculaComponentHandles[entity] = found;
         return found;
     });
     vars.draculaStatValue = (Func<long, long, float>)((reference, entity) => {
@@ -865,20 +874,35 @@ init
 
 update
 {
-    vars.draculaTrigger = false;
     vars.draculaValid = false;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
+    vars.clearTrigger();
     vars.startRequested = false;
     vars.valid = false;
     if (!vars.supported) return false;
-    bool legacyTalos = (bool)settings["legacy_talos_first"];
-    bool legacyCarmilla = (bool)settings["legacy_carmilla_first"];
-    vars.routeChoice = legacyTalos ? (legacyCarmilla ? -1 : 1) : (legacyCarmilla ? 2 : 0);
-    int[] route = vars.routeForRun();
-    bool previousRouteValid = vars.routeValid;
-    vars.routeValid = route != null;
-    if (route == null || !previousRouteValid) vars.baselineNeeded = true;
+    // Read the runtime settings here rather than capturing startup's settings
+    // builder in a delegate. Progression is observed even for unchecked events.
+    var enabled = new HashSet<string>();
+    if ((bool)settings["bosses"])
+        foreach (string key in ((Dictionary<string, string>)vars.checkNames).Keys)
+            if ((bool)settings["boss_" + key]) enabled.Add(key);
+    vars.enabledChecks = enabled;
+    if (!Object.ReferenceEquals((object)vars.observedRun, (object)timer.Run))
+    {
+        vars.observedRun = (object)timer.Run;
+        vars.seenChecks.Clear();
+        vars.baselineNeeded = true;
+        vars.invalidateSegment();
+    }
+    int currentIndex = timer.CurrentSplitIndex;
+    object currentSegment = timer.Run != null && currentIndex >= 0 && currentIndex < timer.Run.Count
+        ? (object)timer.Run[currentIndex] : null;
+    if (currentIndex != (int)vars.sampleIndex
+        || !Object.ReferenceEquals(currentSegment, (object)vars.sampleSegment))
+        vars.invalidateSegment();
+    vars.sampleRun = (object)timer.Run;
+    vars.sampleIndex = currentIndex;
+    vars.sampleSegment = currentSegment;
+    vars.sampleRevision = (int)vars.segmentRevision;
     // Loading screens can replace or temporarily remove the player entity.
     // Read their state before the player; retain the last sample on a transient
     // read failure instead of treating missing player data as a loading screen.
@@ -910,6 +934,11 @@ update
         object[] saveSample = vars.saveSnapshot();
         long saveObject = (long)saveSample[0];
         bool fresh = (bool)saveSample[1];
+        if (saveObject != (long)vars.lastSaveObject)
+        {
+            vars.baselineNeeded = true;
+            vars.resetDracula();
+        }
         if (saveObject != (long)vars.armedSaveObject || timer.CurrentPhase != TimerPhase.NotRunning)
         {
             vars.startArmed = false;
@@ -932,6 +961,7 @@ update
     }
     catch
     {
+        vars.baselineNeeded = true;
         vars.saveStatus = "Waiting for stable save data";
     }
     // The same new save can acquire its persistent ID before control returns.
@@ -952,14 +982,17 @@ update
     }
     // Final Dracula uses an independent health edge. Player progression can
     // disappear during death/cutscenes and must not delay or suppress this split.
-    int finalIndex = timer.CurrentSplitIndex;
-    if (route == null || timer.CurrentPhase != TimerPhase.Running
-        || finalIndex < 0 || finalIndex >= 10 || route[finalIndex] != 9
+    // The HP detector follows its checkbox on every row. An initial zero still
+    // cannot replay a past kill; deselecting the event breaks HP continuity.
+    if (!enabled.Contains("dracula") || currentSegment == null
+        || timer.CurrentPhase != TimerPhase.Running || !saveValid
         || !vars.loadingValid || vars.loading || vars.loadingArtworkFlowActive
-        || !vars.loadingArtworkFlowKnown || (((int)vars.firedMask & (1 << 9)) != 0))
+        || !vars.loadingArtworkFlowKnown || vars.seenChecks.Contains("dracula"))
         vars.resetDracula();
-    else if (saveValid)
+    else
     {
+        if (previousLoading || !previousLoadingValid || previousLoadingFlow || !previousLoadingFlowKnown)
+            vars.resetDracula();
         try
         {
             object[] sample = vars.draculaSnapshot();
@@ -983,7 +1016,7 @@ update
                     // Recheck loading at the killing hit, not a later defeat flag.
                     if ((bool)vars.loadingSnapshot() || vars.loadingArtworkFlowActive
                         || !vars.loadingArtworkFlowKnown) vars.resetDracula();
-                    else vars.draculaTrigger = true;
+                    else vars.emitCheck("dracula");
                 }
                 vars.draculaEntity = entity;
                 vars.draculaStat = healthStat;
@@ -996,7 +1029,11 @@ update
                 vars.draculaStatus = "Reading final Dracula health";
             }
         }
-        catch { vars.draculaStatus = "Waiting for stable final Dracula health"; }
+        catch
+        {
+            vars.resetDracula();
+            vars.draculaStatus = "Waiting for stable final Dracula health";
+        }
     }
     try
     {
@@ -1053,13 +1090,13 @@ update
         if (size < 0 || size > 8192 || size > vars.i32(items + 0x18))
             throw new Exception("Invalid progression list");
         byte[] pointers = vars.read(items + 0x20, size * 8);
-        int mask = 0;
+        var flags = new HashSet<string>();
         for (int i = 0; i < size; i++)
         {
             long key = BitConverter.ToInt64(pointers, i * 8);
             string guid = vars.guid(vars.ptr(key + 0x18));
-            int bit;
-            if (vars.idBits.TryGetValue(guid, out bit)) mask |= bit;
+            string check;
+            if (vars.flagChecks.TryGetValue(guid, out check)) flags.Add(check);
         }
         // Reject a sample if the game changed the list while we read it.
         if (list != vars.ptr(component + 0x28) || items != vars.ptr(list + 0x10)
@@ -1067,28 +1104,22 @@ update
             || mc != vars.ptr(manager + 0xB0))
             throw new Exception("Player progression changed during sample");
 
-        int previous = vars.mask;
-        vars.mask = mask;
+        HashSet<string> previous = vars.flags;
+        vars.flags = flags;
         vars.valid = true;
-        vars.status = route == null ? "Load a supported ten-split route or choose the order for an older renamed file" : "Reading live boss flags";
-        if (vars.baselineNeeded || (previous & ~mask) != 0)
+        vars.status = "Reading live check events";
+        if (vars.baselineNeeded || !previous.IsSubsetOf(flags))
         {
             // Attach, player replacement, failed reads and save rollback must
             // establish a baseline instead of replaying completed bosses.
-            vars.baselineNeeded = false;
+            foreach (string check in flags) vars.seenChecks.Add(check);
+            // Keep waiting through a save-read gap; restored flags may arrive
+            // on the first poll that can identify that save again.
+            vars.baselineNeeded = !saveValid;
             return;
         }
-        int index = timer.CurrentSplitIndex;
-        if (route != null && timer.CurrentPhase == TimerPhase.Running && index >= 0 && index < 10)
-        {
-            int boss = route[index];
-            int bit = 1 << boss;
-            if (boss != 9 && ((mask & ~previous) & bit) != 0 && (((int)vars.firedMask & bit) == 0))
-            {
-                vars.trigger = index;
-                vars.triggerBoss = boss;
-            }
-        }
+        foreach (string check in flags)
+            if (!previous.Contains(check)) vars.emitCheck(check);
     }
     catch
     {
@@ -1096,7 +1127,7 @@ update
         vars.component = 0L;
         vars.status = "Waiting for stable player data";
         // Continue the independent loading clock and new-save detector even
-        // when the player is absent. Split is guarded by vars.valid below.
+        // when the player is absent. No progression edge is emitted here.
         return true;
     }
 }
@@ -1108,7 +1139,7 @@ isLoading
 
 start
 {
-    if (!vars.supported || !vars.routeValid || !vars.startRequested || timer.CurrentPhase != TimerPhase.NotRunning)
+    if (!vars.supported || !vars.startRequested || timer.CurrentPhase != TimerPhase.NotRunning)
         return false;
     // Consume this event even if LiveSplit's Starting checkbox is disabled.
     vars.startRequested = false;
@@ -1121,22 +1152,20 @@ start
 split
 {
     int index = timer.CurrentSplitIndex;
-    int[] route = vars.routeForRun();
-    if (timer.CurrentPhase != TimerPhase.Running || index < 0 || index >= 10 || route == null) return false;
-    int boss = route[index];
-    if (boss == 9)
-    {
-        if (!vars.draculaTrigger || !vars.draculaValid) return false;
-    }
-    else if (!vars.valid || (int)vars.trigger != index || (int)vars.triggerBoss != boss) return false;
-    int bit = 1 << boss;
-    if (((int)vars.firedMask & bit) != 0) return false;
-    vars.firedMask = (int)vars.firedMask | bit;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
-    vars.draculaTrigger = false;
-    print(boss == 9 ? "Final Dracula HP reached zero" : "Boss defeated: " + vars.names[boss]);
+    string check = vars.triggerCheck;
+    if (timer.CurrentPhase != TimerPhase.Running || timer.Run == null || check == null
+        || index < 0 || index >= timer.Run.Count || index != (int)vars.triggerIndex
+        || !Object.ReferenceEquals((object)timer.Run, (object)vars.triggerRun)
+        || !Object.ReferenceEquals((object)timer.Run[index], (object)vars.triggerSegment)
+        || !(bool)settings["bosses"] || !(bool)settings["boss_" + check]) return false;
+    vars.clearTrigger();
+    print(check == "dracula" ? "Final Dracula HP reached zero" : "Boss defeated: " + vars.checkNames[check]);
     return true;
+}
+
+onSplit
+{
+    vars.invalidateSegment();
 }
 
 onStart
@@ -1146,9 +1175,8 @@ onStart
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
-    vars.firedMask = 0;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
+    vars.seenChecks.Clear();
+    vars.invalidateSegment();
     vars.baselineNeeded = true;
 }
 
@@ -1158,9 +1186,8 @@ onReset
     vars.startRequested = false;
     vars.startArmed = false;
     vars.armedSaveObject = 0L;
-    vars.firedMask = 0;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
+    vars.seenChecks.Clear();
+    vars.invalidateSegment();
     vars.baselineNeeded = true;
 }
 
@@ -1177,12 +1204,13 @@ exit
     vars.valid = false;
     vars.baselineNeeded = true;
     vars.component = 0L;
-    vars.trigger = -1;
-    vars.triggerBoss = -1;
+    vars.invalidateSegment();
     vars.status = "Waiting for the game";
 }
 
 shutdown
 {
+    timer.OnSkipSplit -= vars.segmentChanged;
+    timer.OnUndoSplit -= vars.segmentChanged;
     timer.IsGameTimePaused = false;
 }
