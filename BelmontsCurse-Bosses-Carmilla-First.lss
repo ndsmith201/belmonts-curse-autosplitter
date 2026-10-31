@@ -12,7 +12,6 @@
     </Region>
     <Variables />
     <CustomVariables>
-      <Variable name="BelmontsCurse.Route">CarmillaFirst</Variable>
     </CustomVariables>
   </Metadata>
   <Offset>00:00:00</Offset>
