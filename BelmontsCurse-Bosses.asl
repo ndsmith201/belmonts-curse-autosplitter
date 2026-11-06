@@ -1,12 +1,11 @@
-// Castlevania: Belmont's Curse -- ten-boss route, Windows Steam build 1.1.3.
+// Castlevania: Belmont's Curse -- ten-boss route, Windows Steam.
 // Reads boss progression and final Dracula HP without writing to the game's memory or save files.
 // A new save arms auto-start; the first accepted movement input starts timing.
 // Reset manually between attempts.
 // Use the accompanying ten-segment .lss file and enable Starting in the layout.
 // The saved route ID maps boss positions independently of displayed split names.
 // Game Time removes visible room loads and red/gold loading artwork; LiveSplit also records Real Time.
-// GameAssembly.dll SHA256: 4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152
-// Defeat GUIDs were extracted from this installed build's actual assets.
+// Defeat GUIDs come from the game's assets.
 
 state("Castlevania Belmont's Curse") {}
 
@@ -152,15 +151,27 @@ init
     if (module == null) throw new Exception("GameAssembly.dll has not loaded yet.");
     vars.baseAddress = module.BaseAddress.ToInt64();
 
-    // Fixed offsets are accepted only for the exact binary inspected and tested.
+    // Select metadata addresses only for exact GameAssembly.dll builds.
     string hash;
     using (var sha = System.Security.Cryptography.SHA256.Create())
     using (var file = File.OpenRead(module.FileName))
         hash = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
-    vars.supported = hash == "4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152";
-    version = vars.supported ? "Steam 1.1.3 (verified binary)" : "Unsupported game build";
+    bool steam114 = hash == "59541a026f0e0dc29a05670d39b09c15e7020b1737543537d3b06821b28f58df"; // Build 26485918
+    bool steam113 = hash == "4904978ba2c15884185cfaea8d348dfb8ffe69d466fafed1f46fb963a7276152"; // Build 25975867
+    vars.supported = steam114 || steam113;
+    version = steam114 ? "Steam 1.1.4 (build 26485918)" : steam113 ? "Steam 1.1.3 (verified binary)" : "Unsupported game build";
     vars.status = vars.supported ? "Waiting for a loaded save" : "Unsupported GameAssembly.dll -- update this script";
     print(vars.status);
+    if (!vars.supported) return;
+
+    long roomTransitionInRva = steam114 ? 0x3F0A650L : 0x3F082C8L;
+    long roomTransitionOutRva = steam114 ? 0x3F0A720L : 0x3F08390L;
+    long saveLogicGetRva = steam114 ? 0x3F19190L : 0x3F16AD8L;
+    long applicationFlowRegistryRva = steam114 ? 0x3F26598L : 0x3F24238L;
+    long applicationFlowManagerRva = steam114 ? 0x3F618D0L : 0x3F5F570L;
+    long cameraRegistryRva = steam114 ? 0x3F26820L : 0x3F244C0L;
+    long componentsIndexCacheRva = steam114 ? 0x3F80FE0L : 0x3F7EC38L;
+    vars.gameStateManagerRva = steam114 ? 0x3F260D8L : 0x3F23D78L;
 
     vars.read = (Func<long, int, byte[]>)((address, length) => {
         if (address < 0x10000 || length < 0 || length > 1048576)
@@ -222,9 +233,9 @@ init
     vars.loadingSnapshot = (Func<bool>)(() => {
         bool unknown = false;
         // Keep room-to-room loading removal independent of the full-screen UI.
-        try { if ((bool)vars.roomLoadingVisible(0x3F082C8L)) return true; }
+        try { if ((bool)vars.roomLoadingVisible(roomTransitionInRva)) return true; }
         catch { unknown = true; }
-        try { if ((bool)vars.roomLoadingVisible(0x3F08390L)) return true; }
+        try { if ((bool)vars.roomLoadingVisible(roomTransitionOutRva)) return true; }
         catch { unknown = true; }
         try
         {
@@ -242,9 +253,9 @@ init
         return false;
     });
     vars.saveSnapshot = (Func<object[]>)(() => {
-        // SingletonScriptableObject<SaveLogic>.Instance MethodInfo -> rgctx
-        // -> closed singleton class -> static instance. Verified for this build.
-        long method = vars.ptr((long)vars.baseAddress + 0x3F16AD8);
+        // SingletonScriptableObject<SaveLogic>.Get MethodInfo -> rgctx
+        // -> closed singleton class -> static instance.
+        long method = vars.ptr((long)vars.baseAddress + saveLogicGetRva);
         long owner = vars.ptr(method + 0x20);
         long context = vars.ptr(owner + 0xC0);
         long singleton = vars.ptr(context + 0x10);
@@ -481,7 +492,7 @@ init
     vars.loadingArtworkSnapshot = (Func<bool>)(() => {
         vars.artworkBudget[0] = 512; vars.loadingArtworkFlowKnown = false;
         long afm = 0;
-        foreach (long holder in (long[])vars.artworkRegistry(0x3F24238L, "ScrVar_GameManagement_ApplicationFlowManager")) {
+        foreach (long holder in (long[])vars.artworkRegistry(applicationFlowRegistryRva, "ScrVar_GameManagement_ApplicationFlowManager")) {
             long candidate = vars.ptr(holder + 0x10);
             if (candidate != 0 && (string)vars.artworkName(candidate) == "ApplicationFlowManager" && vars.ptr(candidate + 0x10) != 0) afm = candidate;
         }
@@ -503,7 +514,7 @@ init
                 throw new Exception("Artwork flow scene lists changed");
             if (sceneManager != (long)vars.ptr(afm + 0x30)) throw new Exception("Artwork flow manager changed");
         }
-        long afmType = vars.ptr((long)vars.baseAddress + 0x3F5F570);
+        long afmType = vars.ptr((long)vars.baseAddress + applicationFlowManagerRva);
         bool engineLoading = false;
         if (afmType >= 0x10000 && (afmType & 7) == 0) {
             long fields = vars.ptr(afmType + 0xB8);
@@ -520,7 +531,7 @@ init
         // This persistent variable listener exists throughout entry/opaque/exit,
         // including cold attachment after onEndLoadState removed its controller.
         try {
-            foreach (long holder in (long[])vars.artworkRegistry(0x3F244C0L, "ScrVar_GameManagement_MainCamera"))
+            foreach (long holder in (long[])vars.artworkRegistry(cameraRegistryRva, "ScrVar_GameManagement_MainCamera"))
                 foreach (long target in (long[])vars.artworkTargets((long)vars.ptr(holder + 0x18))) vars.artworkLearnManager(target, 0L);
         } catch { unknown = true; }
         bool visible = false;
@@ -631,7 +642,7 @@ init
         return (float)Math.Round((double)value, MidpointRounding.ToEven);
     });
     vars.draculaSnapshot = (Func<object[]>)(() => {
-        long type = vars.ptr((long)vars.baseAddress + 0x3F23D78);
+        long type = vars.ptr((long)vars.baseAddress + (long)vars.gameStateManagerRva);
         long manager = vars.ptr(vars.ptr(type + 0xB8));
         long context = vars.ptr(manager + 0x28);
         if (context < 0x10000) throw new Exception("No boss entity context");
@@ -754,7 +765,7 @@ init
         return top != 0 && vars.ptr(top + 0x18) == initial;
     });
     vars.movementSnapshot = (Func<bool>)(() => {
-        long gameType = vars.ptr((long)vars.baseAddress + 0x3F23D78);
+        long gameType = vars.ptr((long)vars.baseAddress + (long)vars.gameStateManagerRva);
         long manager = vars.ptr(vars.ptr(gameType + 0xB8));
         long mc = vars.ptr(manager + 0xB0);
         if (mc < 0x10000) return false;
@@ -804,7 +815,7 @@ init
 
             // ComponentsIndexCache assigns these indices at runtime; none of
             // the component indices observed in one session are hardcoded.
-            long indexType = vars.ptr((long)vars.baseAddress + 0x3F7EC38);
+            long indexType = vars.ptr((long)vars.baseAddress + componentsIndexCacheRva);
             long indexCache = vars.ptr(vars.ptr(indexType + 0xB8));
             long indexMap = vars.ptr(indexCache + 0x10);
             long indexEntries = vars.ptr(indexMap + 0x18);
@@ -1001,7 +1012,7 @@ update
     try
     {
         // GameStateManager_TypeInfo -> static_fields -> instance -> MC entity.
-        long klass = vars.ptr((long)vars.baseAddress + 0x3F23D78);
+        long klass = vars.ptr((long)vars.baseAddress + (long)vars.gameStateManagerRva);
         long manager = vars.ptr(vars.ptr(klass + 0xB8));
         long mc = vars.ptr(manager + 0xB0);
         if (mc < 0x10000 || vars.read(mc + 0x20, 1)[0] != 0)
