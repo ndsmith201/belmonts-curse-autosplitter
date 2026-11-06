@@ -11,7 +11,7 @@ A ten-boss autosplitter with **two route orders**, **custom split names**, **fir
 | File | Purpose |
 | --- | --- |
 | [BelmontsCurse-Bosses.asl](BelmontsCurse-Bosses.asl) | Detects movement, boss defeats, Dracula's final HP, and loading screens. |
-| [BelmontsCurse-Bosses-MovementStart.lsl](BelmontsCurse-Bosses-MovementStart.lsl) | Ready-to-load layout with the autosplitter component. |
+| [BelmontsCurse-Bosses-MovementStart.lsl](BelmontsCurse-Bosses-MovementStart.lsl) | LiveSplit layout with a scriptable autosplitter component. Select the script during setup. |
 | [BelmontsCurse-Bosses-Talos-First.lss](BelmontsCurse-Bosses-Talos-First.lss) | Talos → Carmilla route with embedded portraits. |
 | [BelmontsCurse-Bosses-Carmilla-First.lss](BelmontsCurse-Bosses-Carmilla-First.lss) | Carmilla → Talos route with embedded portraits. |
 
@@ -22,7 +22,7 @@ Both routes use the same script and layout. Each supplied `.lss` saves its route
 1. Select **Code → Download ZIP** on GitHub and extract it into a permanent folder. Keep the script, layout, and route files together.
 2. In LiveSplit, right-click **Open Splits → From File** and choose either `BelmontsCurse-Bosses-Talos-First.lss` or `BelmontsCurse-Bosses-Carmilla-First.lss`. Both are blank routes with no recorded times; keep your own `.lss` if it contains PBs you want to preserve.
 3. Right-click **Open Layout → From File** and choose `BelmontsCurse-Bosses-MovementStart.lsl`.
-4. Open **Edit Layout**, double-click **Scriptable Auto Splitter**, and browse to the **updated `BelmontsCurse-Bosses.asl` from this download**, even if a path is already shown. Older scripts do not support these saved route IDs and arbitrary split names. Keep **Starting** and **Splitting** enabled, then save the layout.
+4. Open **Edit Layout**, double-click **Scriptable Auto Splitter**, and browse to `BelmontsCurse-Bosses.asl` in the folder you just extracted. The bundled layout starts with a blank script path. When updating an existing layout, reselect the script to replace the saved path to your older copy. Keep **Starting** and **Splitting** enabled, then save the layout.
 5. Load the layout and reset the timer **before creating a new save**. Creating that save arms auto-start; your first directional movement starts the timer once gameplay controls become available. Keyboard and controller movement both work.
 6. Reset manually between attempts, then create another new save. The normal Start/Split hotkey remains available.
 
