@@ -84,9 +84,15 @@ Dracula's first-form defeat does not finish the run. The final split uses the be
 
 ## Compatibility and validation
 
-Built for the verified **Steam 1.1.3** game binary and **LiveSplit 1.8.25 on 64-bit Windows**. The script locates the running game automatically and is self-contained; it reads memory without modifying the game or its save files. Route information is kept in the LiveSplit `.lss` when you save splits. All portraits are embedded in each splits file.
+Supports **Steam 1.1.4 (build 26485918)** and **Steam 1.1.3 (build 25975867)** with **LiveSplit 1.8.25 on 64-bit Windows**. The script locates the running game automatically and is self-contained; it reads memory without modifying the game or its save files. Route information is kept in the LiveSplit `.lss` when you save splits. All portraits are embedded in each splits file.
 
-The script checks `GameAssembly.dll` before using its offsets. A changed game binary requires an updated script.
+The script uses the SHA-256 of `GameAssembly.dll` to select the offsets for each supported build. A changed game binary requires an updated script.
+
+### Steam 1.1.4 validation
+
+The updated script attached to build 26485918 in LiveSplit and read the active save, boss progression, and loading state. All ten boss defeat IDs matched the updated game assets. Both ten-boss routes passed simulated splits in LiveSplit's native ASL engine, including the final beast's drop to 0 HP. A complete live route on 1.1.4 is still pending.
+
+### Steam 1.1.3 validation
 
 Both route orders passed ten-boss checks in LiveSplit's native ASL engine, along with movement-start, loading-pause, and zero-HP safety checks. The route files and all portraits were loaded and rendered with LiveSplit.
 
